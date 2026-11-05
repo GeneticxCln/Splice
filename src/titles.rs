@@ -1,0 +1,256 @@
+use std::fmt::Write as _;
+use std::path::Path;
+
+use anyhow::{Context, Result};
+
+use crate::model::{Clip, Project, Title, TitleStyle};
+
+/// Builds an ASS subtitle file for every title clip in the project. ASS is
+/// rendered by ffmpeg's libass filter and is the single title renderer for both
+/// preview and export, so the two paths cannot drift apart.
+pub fn write_ass(project: &Project, width: u32, height: u32, path: &Path) -> Result<bool> {
+    let titles = project.title_clips();
+    if titles.is_empty() {
+        return Ok(false);
+    }
+
+    let mut ass = String::new();
+    writeln!(ass, "[Script Info]")?;
+    writeln!(ass, "ScriptType: v4.00+")?;
+    writeln!(ass, "PlayResX: {width}")?;
+    writeln!(ass, "PlayResY: {height}")?;
+    writeln!(ass, "WrapStyle: 2")?;
+    writeln!(ass, "ScaledBorderAndShadow: yes")?;
+    writeln!(ass, "YCbCr Matrix: TV.709")?;
+    writeln!(ass)?;
+    writeln!(ass, "[V4+ Styles]")?;
+    writeln!(
+        ass,
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
+    )?;
+
+    for (index, clip) in titles.iter().enumerate() {
+        let Some(title) = &clip.title else {
+            continue;
+        };
+        let style = style_line(index, title, height);
+        writeln!(ass, "{style}")?;
+    }
+
+    writeln!(ass)?;
+    writeln!(ass, "[Events]")?;
+    writeln!(
+        ass,
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
+    )?;
+
+    for (index, clip) in titles.iter().enumerate() {
+        let Some(title) = &clip.title else {
+            continue;
+        };
+        let event = event_line(index, clip, title, width, height);
+        writeln!(ass, "{event}")?;
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("could not create {}", parent.display()))?;
+    }
+    std::fs::write(path, ass)
+        .with_context(|| format!("could not write title overlay {}", path.display()))?;
+    Ok(true)
+}
+
+fn style_line(index: usize, title: &Title, output_height: u32) -> String {
+    let scale = output_height as f32 / 1080.0;
+    let font_size = (title.size.max(8.0) * scale).round().max(8.0);
+    let font = if title.font.trim().is_empty() {
+        "DejaVu Sans"
+    } else {
+        title.font.as_str()
+    };
+    let font = font.replace(',', " ");
+    let primary = ass_color(&title.color, 0);
+    let outline = ass_color(&title.background, alpha_for(title.background_opacity));
+    let back = ass_color(&title.background, alpha_for(title.background_opacity));
+    let (border_style, outline_width) = if title.background_opacity > 0.01 {
+        (3, (font_size * 0.24).round().max(6.0))
+    } else {
+        (1, 0.0)
+    };
+    let bold = if title.bold { -1 } else { 0 };
+    format!(
+        "Style: Title{index},{font},{font_size:.0},{primary},&H000000FF,{outline},{back},{bold},0,0,0,100,100,0,0,{border_style},{outline_width:.0},0,5,0,0,0,1"
+    )
+}
+
+fn event_line(index: usize, clip: &Clip, title: &Title, width: u32, height: u32) -> String {
+    let duration = clip.duration().max(0.05);
+    let start = fmt_time(clip.start.max(0.0));
+    let end = fmt_time(clip.start.max(0.0) + duration);
+    let scale = height as f32 / 1080.0;
+    let size = (title.size.max(8.0) * scale).max(8.0);
+    let x = (title.position_x.clamp(0.0, 1.0) * width as f32).round();
+    let y = (title.position_y.clamp(0.0, 1.0) * height as f32).round();
+    let intro = (duration.min(0.55) * 0.8 * 1000.0) as i64;
+    let outro = (duration.min(0.55) * 0.8 * 1000.0) as i64;
+    let dur_ms = (duration * 1000.0) as i64;
+
+    let positioned = matches!(
+        title.style,
+        TitleStyle::Fade
+            | TitleStyle::Pop
+            | TitleStyle::BlurIn
+            | TitleStyle::Tracking
+            | TitleStyle::SpinIn
+            | TitleStyle::Pulse
+    );
+    let mut tags = if positioned {
+        format!("\\an5\\pos({x:.0},{y:.0})")
+    } else {
+        String::new()
+    };
+    match title.style {
+        TitleStyle::Fade => {
+            let _ = write!(tags, "\\fad({intro},{outro})");
+        }
+        TitleStyle::Rise => {
+            let _ = write!(
+                tags,
+                "\\an5\\move({x:.0},{:.0},{x:.0},{y:.0},0,520)\\fad({intro},{outro})",
+                y + size * 1.1
+            );
+        }
+        TitleStyle::SlideLeft => {
+            let _ = write!(
+                tags,
+                "\\an5\\move({:.0},{y:.0},{x:.0},{y:.0},0,520)\\fad({intro},{outro})",
+                x - width as f32 * 0.12
+            );
+        }
+        TitleStyle::Pop => {
+            let _ = write!(
+                tags,
+                "\\fad(120,{outro})\\fscx38\\fscy38\\t(0,220,\\fscx106\\fscy106)\\t(220,400,\\fscx100\\fscy100)"
+            );
+        }
+        TitleStyle::BlurIn => {
+            let _ = write!(tags, "\\blur18\\t(0,480,\\blur0)\\fad({intro},{outro})");
+        }
+        TitleStyle::Tracking => {
+            let _ = write!(
+                tags,
+                "\\fsp{:.0}\\fad({intro},{outro})\\t(0,700,\\fsp{:.0})",
+                size * 0.35,
+                size * 0.02
+            );
+        }
+        TitleStyle::LowerThird => {
+            let start_x = (width as f32 * 0.04).max(40.0);
+            let _ = write!(
+                tags,
+                "\\an4\\move({start_x:.0},{:.0},{start_x:.0},{:.0},0,480)\\fad({intro},{outro})",
+                (height as f32 * 0.84).round() + 85.0,
+                (height as f32 * 0.84).round()
+            );
+        }
+        TitleStyle::CreditRoll => {
+            let _ = write!(
+                tags,
+                "\\an5\\move({x:.0},{:.0},{x:.0},{:.0},0,{dur_ms})",
+                height as f32 * 1.08,
+                -((height as f32) * 0.12)
+            );
+        }
+        TitleStyle::SpinIn => {
+            let _ = write!(
+                tags,
+                "\\frz-14\\fscx62\\fscy62\\t(0,520,\\frz0\\fscx100\\fscy100)\\fad({intro},{outro})"
+            );
+        }
+        TitleStyle::Pulse => {
+            let _ = write!(
+                tags,
+                "\\fad(300,{outro})\\t(0,900,\\fscx104\\fscy104)\\t(900,1800,\\fscx100\\fscy100)\\t(1800,2700,\\fscx104\\fscy104)\\t(2700,3600,\\fscx100\\fscy100)"
+            );
+        }
+    }
+
+    let mut text = sanitize_text(&title.text);
+    if !title.subtitle.trim().is_empty() {
+        let _ = write!(
+            text,
+            "\\N{{\\fs{:.0}\\alpha&H20&}}{}",
+            size * 0.52,
+            sanitize_text(&title.subtitle)
+        );
+    }
+
+    format!("Dialogue: 0,{start},{end},Title{index},,0,0,0,,{{{tags}}}{text}")
+}
+
+fn sanitize_text(text: &str) -> String {
+    text.replace('\\', "/")
+        .replace('\r', "")
+        .replace('\n', "\\N")
+        .replace('{', "(")
+        .replace('}', ")")
+}
+
+fn alpha_for(opacity: f32) -> u8 {
+    ((1.0 - opacity.clamp(0.0, 1.0)) * 255.0).round() as u8
+}
+
+fn ass_color(hex: &str, alpha: u8) -> String {
+    let clean = hex.trim().trim_start_matches('#');
+    let parsed = u32::from_str_radix(clean, 16).ok();
+    let (r, g, b) = match parsed {
+        Some(value) if clean.len() >= 6 => (
+            ((value >> 16) & 0xff) as u8,
+            ((value >> 8) & 0xff) as u8,
+            (value & 0xff) as u8,
+        ),
+        _ => (245, 242, 234),
+    };
+    format!("&H{alpha:02X}{b:02X}{g:02X}{r:02X}")
+}
+
+fn fmt_time(seconds: f64) -> String {
+    let total_centis = (seconds.max(0.0) * 100.0).round() as u64;
+    let centis = total_centis % 100;
+    let total_seconds = total_centis / 100;
+    let secs = total_seconds % 60;
+    let minutes = (total_seconds / 60) % 60;
+    let hours = total_seconds / 3600;
+    format!("{hours}:{minutes:02}:{secs:02}.{centis:02}")
+}
+
+pub fn escape_filter_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .replace(':', "\\:")
+        .replace('\'', "\\'")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_format_is_centisecond_accurate() {
+        assert_eq!(fmt_time(0.0), "0:00:00.00");
+        assert_eq!(fmt_time(61.234), "0:01:01.23");
+        assert_eq!(fmt_time(3661.5), "1:01:01.50");
+    }
+
+    #[test]
+    fn ass_color_is_bgr_with_alpha() {
+        assert_eq!(ass_color("#FF6B4A", 0), "&H004A6BFF");
+        assert_eq!(ass_color("#000000", 128), "&H80000000");
+    }
+
+    #[test]
+    fn text_cannot_inject_override_tags() {
+        assert_eq!(sanitize_text("hi {\\b1}"), "hi (/b1)");
+    }
+}

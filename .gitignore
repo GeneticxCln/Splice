@@ -1,0 +1,7 @@
+/target
+/docs/demo.mp4
+/docs/demo.splice
+/docs/media
+/docs/fixtures
+*.splice.bak
+*.tmp
