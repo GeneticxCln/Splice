@@ -4,10 +4,11 @@
 #   2. probe + import them through the app's real library path,
 #   3. build the feature timeline and save docs/demo.splice,
 #   4. export docs/demo.mp4 at 1080p through the CLI,
-#   5. capture the real GUI to docs/screenshot.png.
+#   5. encode the README demo GIF as docs/demo.gif,
+#   6. capture the real GUI to docs/screenshot.png.
 #
 # Optional environment overrides:
-#   DEMO_MEDIA_DIR, DEMO_PROJECT, DEMO_OUTPUT, DEMO_SCREENSHOT
+#   DEMO_MEDIA_DIR, DEMO_PROJECT, DEMO_OUTPUT, DEMO_GIF, DEMO_SCREENSHOT
 #   SKIP_SCREENSHOT=1  (headless machines; screenshot evidence is then absent)
 set -euo pipefail
 
@@ -17,6 +18,7 @@ cd "$ROOT"
 MEDIA_DIR="${DEMO_MEDIA_DIR:-$ROOT/docs/media}"
 PROJECT="${DEMO_PROJECT:-$ROOT/docs/demo.splice}"
 OUTPUT="${DEMO_OUTPUT:-$ROOT/docs/demo.mp4}"
+GIF="${DEMO_GIF:-$ROOT/docs/demo.gif}"
 SCREENSHOT="${DEMO_SCREENSHOT:-$ROOT/docs/screenshot.png}"
 
 for tool in ffmpeg ffprobe cargo; do
@@ -26,7 +28,7 @@ for tool in ffmpeg ffprobe cargo; do
     }
 done
 
-mkdir -p "$MEDIA_DIR" "$(dirname "$PROJECT")" "$(dirname "$OUTPUT")" "$(dirname "$SCREENSHOT")"
+mkdir -p "$MEDIA_DIR" "$(dirname "$PROJECT")" "$(dirname "$OUTPUT")" "$(dirname "$GIF")" "$(dirname "$SCREENSHOT")"
 
 echo "== generating local fixtures in $MEDIA_DIR =="
 ffmpeg -hide_banner -loglevel error -y \
@@ -77,6 +79,16 @@ ffprobe -v error -select_streams a:0 \
     -show_entries stream=codec_name,sample_rate,channels \
     -of default=noprint_wrappers=1 "$OUTPUT"
 
+echo "== encoding README demo GIF to $GIF =="
+ffmpeg -hide_banner -loglevel error -y -i "$OUTPUT" \
+    -vf 'fps=10,scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3' \
+    -loop 0 "$GIF"
+
+test -s "$GIF" || {
+    echo "demo: GIF was not written" >&2
+    exit 1
+}
+
 if [[ "${SKIP_SCREENSHOT:-0}" == "1" ]]; then
     echo "SKIP_SCREENSHOT=1; GUI screenshot not captured"
 else
@@ -95,4 +107,4 @@ else
     echo "SCREENSHOT_OK $SCREENSHOT"
 fi
 
-echo "DEMO_OK project=$PROJECT video=$OUTPUT screenshot=${SCREENSHOT}"
+echo "DEMO_OK project=$PROJECT video=$OUTPUT gif=$GIF screenshot=${SCREENSHOT}"

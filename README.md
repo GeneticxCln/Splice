@@ -6,11 +6,9 @@ Splice is a Linux timeline video editor written in Rust with egui/eframe. It
 uses system ffmpeg for media probing, proxy preview, and H.264/AAC export.
 Projects are versioned JSON documents with the `.splice` extension.
 
-![Splice editing the demo project](docs/screenshot.png)
+![Splice demo reel](docs/demo.gif)
 
-Splice's 9:16 Shorts workspace uses a title-safe column and platform-overlay guides:
-
-![Splice Shorts mode](docs/shorts.png)
+*The 21.5-second demo reel exercises transitions, effects, titles, and audio.*
 
 ## Features
 
@@ -66,8 +64,9 @@ bash scripts/demo.sh
 ```
 
 This creates local ffmpeg fixtures, imports them through the library, writes
-`docs/demo.splice`, exports `docs/demo.mp4`, and captures `docs/screenshot.png`.
-Set `SKIP_SCREENSHOT=1` on a headless machine.
+`docs/demo.splice`, exports `docs/demo.mp4`, encodes the README's `docs/demo.gif`,
+and captures `docs/screenshot.png`. Set `SKIP_SCREENSHOT=1` on a headless
+machine.
 
 ## Tests
 
