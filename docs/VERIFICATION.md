@@ -523,3 +523,25 @@ playback_starts_audio_monitor                       1 passed (0.69s)
 ```
 
 Gate status: PASS, with the MSRV CI job unexecuted locally.
+
+## Slice 11 — MSRV verified on Rust 1.88
+
+rustup was installed after Slice 10, and Rust 1.85.0 was installed for the
+original gate. The 1.85.0 check failed before compiling: the locked graph
+requires newer compilers for `image 0.25.10`, `wayland-protocols 0.32.13`,
+`idna_adapter 1.2.2`, `calloop 0.14.5` and ICU 2.4 (Rust 1.86–1.88). The
+declared MSRV was raised to 1.88 rather than pinning older transitive crates.
+
+The toolchain check in `scripts/check-msrv.sh` now uses `rustup run`, which
+matches rustup's `1.88.0-x86_64-unknown-linux-gnu` label. The script default,
+`Cargo.toml`, README and CI workflow all declare Rust 1.88.
+
+Evidence with rustc 1.88.0 (6b00bc388) and cargo 1.88.0:
+
+```text
+bash scripts/check-msrv.sh
+== checking with Rust 1.88.0 (MSRV) ==
+cargo +1.88.0 check --all-targets --locked          exit 0 (13.55s)
+```
+
+Gate status: PASS.

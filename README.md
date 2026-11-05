@@ -32,7 +32,7 @@ Splice is fully offline: no network calls, telemetry, uploads or auto-update.
 ## Requirements
 
 - Linux with Wayland or X11 and working OpenGL (eframe/glow).
-- Rust 1.85 or newer (edition 2024).
+- Rust 1.88 or newer (edition 2024).
 - System `ffmpeg` and `ffprobe` with the `libx264` and `aac` encoders.
 - DejaVu fonts for the UI and the default title look. Other installed fonts are
   offered in the title editor.
@@ -114,7 +114,7 @@ refused rather than guessed.
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-bash scripts/check-msrv.sh   # requires rustup and Rust 1.85.0
+bash scripts/check-msrv.sh   # requires rustup and Rust 1.88.0
 ```
 
 The deterministic suite covers the project round-trip, version refusal, offline

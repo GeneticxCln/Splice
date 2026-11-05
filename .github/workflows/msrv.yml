@@ -21,6 +21,6 @@ jobs:
             libxi-dev \
             libxkbcommon-dev \
             libxrandr-dev
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
       - name: Check the declared MSRV
         run: cargo check --all-targets --locked
