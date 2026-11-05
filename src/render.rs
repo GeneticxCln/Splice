@@ -3,12 +3,12 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::ffmpeg::Toolchain;
 use crate::model::{
-    resolve_media_path, Clip, EffectKind, MediaAsset, MediaKind, Project, Track, TrackKind,
-    TransitionKind, FPS,
+    Clip, EffectKind, FPS, MediaAsset, MediaKind, Project, Track, TrackKind, TransitionKind,
+    resolve_media_path,
 };
 use crate::titles::{escape_filter_path, write_ass};
 
@@ -889,11 +889,7 @@ impl LabelAllocator {
 }
 
 fn even(value: u32) -> u32 {
-    if value % 2 == 0 {
-        value
-    } else {
-        value - 1
-    }
+    if value % 2 == 0 { value } else { value - 1 }
 }
 
 fn command_display(command: &Command) -> String {

@@ -481,3 +481,45 @@ cargo test      6 passed + 2 ignored (lib), 8 passed (full_suite), 2 passed (ren
 ```
 
 Gate status: PASS.
+
+## Slice 10 — capability probes, font fallback and audio recovery
+
+`Toolchain::detect` now probes the ffmpeg `ass` filter and `fc-match`
+availability. The status bar and About window list missing libx264, AAC, ass or
+fontconfig capabilities, and the toolbar badge changes from `FFMPEG READY` to
+`FFMPEG LIMITED`.
+
+The title editor validates the selected font with `fc-match` (cached per family)
+and warns when libass will substitute a different family. On this host:
+
+```text
+$ fc-match -f '%{family}\n' 'DejaVu Sans'
+DejaVu Sans
+$ fc-match -f '%{family}\n' 'Definitely Missing Splice Font 12345'
+Noto Sans
+```
+
+`AudioMonitor::supervise` now rebuilds the default cpal output after a stream
+error, rate-limited to one rebuild per 750 ms and resuming from the live preview
+playhead. `Preview::tick` invokes it during playback and clears the audio error
+after recovery.
+
+The crate is on edition 2024. `scripts/check-msrv.sh` checks Rust 1.85.0 when
+rustup is available, and `.github/workflows/msrv.yml` runs the same check in CI.
+The local host has no rustup or 1.85 toolchain, so the MSRV script was not run
+here; the current Rust 1.99.1 toolchain compiled the edition-2024 crate.
+
+Evidence:
+
+```text
+cargo fmt --check                                    exit 0
+cargo clippy --all-targets -- -D warnings           exit 0
+cargo check --all-targets                            exit 0
+cargo test      7 passed + 3 ignored (lib), 8 passed (full_suite), 2 passed (render_smoke); 0 failed
+missing_font_reports_a_fallback_warning             1 passed
+audio_monitor_rebuilds_after_output_error           1 passed (0.86s)
+audio_monitor_plays_decoded_audio                   1 passed (0.65s)
+playback_starts_audio_monitor                       1 passed (0.69s)
+```
+
+Gate status: PASS, with the MSRV CI job unexecuted locally.

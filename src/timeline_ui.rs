@@ -5,7 +5,7 @@ use eframe::egui::{
     Ui, Vec2,
 };
 
-use crate::catalog::{transition_name, TRANSITIONS};
+use crate::catalog::{TRANSITIONS, transition_name};
 use crate::model::{Clip, MediaKind, Project, Track, TrackKind, TransitionKind};
 use crate::theme;
 

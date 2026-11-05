@@ -1,5 +1,8 @@
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
+use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 
@@ -189,6 +192,52 @@ fn event_line(index: usize, clip: &Clip, title: &Title, width: u32, height: u32)
     format!("Dialogue: 0,{start},{end},Title{index},,0,0,0,,{{{tags}}}{text}")
 }
 
+/// Returns a warning when fontconfig resolves `font` to a different family,
+/// which means libass will silently substitute it during preview and export.
+/// `None` means the font is available or fontconfig is unavailable.
+pub fn font_fallback_warning(font: &str) -> Option<String> {
+    let font = font.trim();
+    if font.is_empty() {
+        return None;
+    }
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<bool>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cached = cache.lock().ok().and_then(|cache| cache.get(font).copied());
+    let available = match cached {
+        Some(value) => value,
+        None => {
+            let value = font_matches(font);
+            if let Ok(mut cache) = cache.lock() {
+                cache.insert(font.to_string(), value);
+            }
+            value
+        }
+    };
+    match available {
+        Some(false) => Some(format!(
+            "“{font}” is not installed; libass will substitute a fallback font."
+        )),
+        Some(true) | None => None,
+    }
+}
+
+fn font_matches(font: &str) -> Option<bool> {
+    let output = Command::new("fc-match")
+        .args(["-f", "%{family}"])
+        .arg(font)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let families = String::from_utf8_lossy(&output.stdout);
+    Some(
+        families
+            .split(',')
+            .any(|family| family.trim().eq_ignore_ascii_case(font)),
+    )
+}
+
 fn sanitize_text(text: &str) -> String {
     text.replace('\\', "/")
         .replace('\r', "")
@@ -252,5 +301,16 @@ mod tests {
     #[test]
     fn text_cannot_inject_override_tags() {
         assert_eq!(sanitize_text("hi {\\b1}"), "hi (/b1)");
+    }
+
+    #[test]
+    fn missing_font_reports_a_fallback_warning() {
+        if Command::new("fc-match").arg("--version").output().is_err() {
+            return;
+        }
+        assert!(
+            font_fallback_warning("Splice Missing Font 12345").is_some(),
+            "an unavailable family should be reported to the editor"
+        );
     }
 }

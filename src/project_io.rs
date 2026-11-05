@@ -2,18 +2,20 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::model::{
-    resolve_media_path, stored_media_path, Project, PROJECT_EXTENSION, PROJECT_FORMAT,
-    PROJECT_VERSION,
+    PROJECT_EXTENSION, PROJECT_FORMAT, PROJECT_VERSION, Project, resolve_media_path,
+    stored_media_path,
 };
 
 #[derive(Debug, Error)]
 pub enum ProjectError {
-    #[error("unsupported project version {found}: this build supports version {supported}. The project was written by a newer Splice; refusing to guess its schema.")]
+    #[error(
+        "unsupported project version {found}: this build supports version {supported}. The project was written by a newer Splice; refusing to guess its schema."
+    )]
     NewerVersion { found: u64, supported: u32 },
     #[error("unsupported project version {found}: no migration from this version is available")]
     UnsupportedVersion { found: u64 },
@@ -236,11 +238,7 @@ pub fn missing_media_paths(project: &Project, project_dir: &Path) -> Vec<PathBuf
         .iter()
         .filter_map(|asset| {
             let path = resolve_media_path(project_dir, asset);
-            if path.is_file() {
-                None
-            } else {
-                Some(path)
-            }
+            if path.is_file() { None } else { Some(path) }
         })
         .collect()
 }

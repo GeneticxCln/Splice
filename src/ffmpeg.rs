@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::model::MediaKind;
@@ -14,6 +14,8 @@ pub struct Toolchain {
     pub ffprobe_version: String,
     pub libx264: bool,
     pub aac: bool,
+    pub ass_filter: bool,
+    pub fontconfig: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +40,16 @@ impl Toolchain {
         let ffmpeg_version = first_line(command_stdout(&ffmpeg, &["-version"])?);
         let ffprobe_version = first_line(command_stdout(&ffprobe, &["-version"])?);
         let encoders = command_stdout(&ffmpeg, &["-hide_banner", "-encoders"])?;
+        let ass_filter = Command::new(&ffmpeg)
+            .args(["-hide_banner", "-h", "filter=ass"])
+            .output()
+            .map(|output| {
+                output.status.success()
+                    && (String::from_utf8_lossy(&output.stdout).contains("Render ASS subtitles")
+                        || String::from_utf8_lossy(&output.stderr).contains("Render ASS subtitles"))
+            })
+            .unwrap_or(false);
+        let fontconfig = which("fc-match").is_ok();
 
         Ok(Self {
             ffmpeg,
@@ -46,6 +58,8 @@ impl Toolchain {
             ffprobe_version,
             libx264: encoders.contains("libx264"),
             aac: encoders.contains(" aac "),
+            ass_filter,
+            fontconfig,
         })
     }
 
@@ -57,6 +71,26 @@ impl Toolchain {
             bail!("system ffmpeg does not provide the AAC encoder");
         }
         Ok(())
+    }
+
+    /// Capabilities needed for the full feature set. Missing entries are
+    /// surfaced in the status bar and the About window instead of being
+    /// discovered only when an export fails.
+    pub fn capability_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if !self.libx264 {
+            warnings.push("libx264 encoder missing".to_string());
+        }
+        if !self.aac {
+            warnings.push("AAC encoder missing".to_string());
+        }
+        if !self.ass_filter {
+            warnings.push("ffmpeg 'ass' filter missing (titles unavailable)".to_string());
+        }
+        if !self.fontconfig {
+            warnings.push("fc-match missing (title font fallback unverified)".to_string());
+        }
+        warnings
     }
 
     pub fn probe(&self, path: &Path) -> Result<ProbeInfo> {
@@ -95,11 +129,13 @@ impl Toolchain {
 
     pub fn version_summary(&self) -> String {
         format!(
-            "{}\n{}\nlibx264: {}   AAC: {}",
+            "{}\n{}\nlibx264: {}   AAC: {}   ASS filter: {}   fontconfig: {}",
             self.ffmpeg_version,
             self.ffprobe_version,
             if self.libx264 { "yes" } else { "NO" },
-            if self.aac { "yes" } else { "NO" }
+            if self.aac { "yes" } else { "NO" },
+            if self.ass_filter { "yes" } else { "NO" },
+            if self.fontconfig { "yes" } else { "NO" }
         )
     }
 }

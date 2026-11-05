@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SampleRate, SizedSample, SupportedStreamConfig};
 
@@ -159,6 +159,10 @@ pub struct AudioMonitor {
     child: Arc<Mutex<Option<Child>>>,
     shared: Arc<Mutex<MonitorShared>>,
     channels: u16,
+    ffmpeg: PathBuf,
+    source: PathBuf,
+    last_rebuild: Option<Instant>,
+    rebuilds: u32,
 }
 
 impl AudioMonitor {
@@ -199,6 +203,10 @@ impl AudioMonitor {
             child,
             shared,
             channels,
+            ffmpeg: ffmpeg.to_path_buf(),
+            source: source.to_path_buf(),
+            last_rebuild: None,
+            rebuilds: 0,
         })
     }
 
@@ -214,6 +222,49 @@ impl AudioMonitor {
             .expect("audio monitor poisoned")
             .error
             .clone()
+    }
+    /// Reopens the default output and resumes decoding at `resume_seconds`
+    /// when the cpal stream reports an error (for example after a device
+    /// hot-plug). Rate-limited so a permanently unavailable device does not
+    /// spin.
+    pub fn supervise(&mut self, resume_seconds: f64) -> bool {
+        let has_error = self
+            .shared
+            .lock()
+            .expect("audio monitor poisoned")
+            .error
+            .is_some();
+        if !has_error {
+            return false;
+        }
+        let now = Instant::now();
+        if self
+            .last_rebuild
+            .is_some_and(|last| now.duration_since(last) < Duration::from_millis(750))
+        {
+            return false;
+        }
+        self.shutdown();
+        let rebuilds = self.rebuilds.saturating_add(1);
+        match AudioMonitor::start(&self.ffmpeg, &self.source, resume_seconds.max(0.0)) {
+            Ok(mut fresh) => {
+                fresh.rebuilds = rebuilds;
+                fresh.last_rebuild = Some(now);
+                *self = fresh;
+                true
+            }
+            Err(error) => {
+                let mut shared = self.shared.lock().expect("audio monitor poisoned");
+                shared.samples.clear();
+                shared.error = Some(format!("audio output recovery failed: {error:#}"));
+                self.last_rebuild = Some(now);
+                false
+            }
+        }
+    }
+
+    pub fn rebuilds(&self) -> u32 {
+        self.rebuilds
     }
 
     pub fn stop(mut self) {
@@ -626,5 +677,56 @@ mod tests {
         monitor.stop();
         assert!(frames > 0, "output callback consumed no audio frames");
         assert!(diagnostic.is_none(), "audio output reported {diagnostic:?}");
+    }
+
+    /// Hardware gate for recovery: inject a stream error and verify the
+    /// supervisor reopens the device and resumes feeding frames.
+    #[test]
+    #[ignore = "requires a default audio output device and system ffmpeg"]
+    fn audio_monitor_rebuilds_after_output_error() {
+        let host = cpal::default_host();
+        if host.default_output_device().is_none() {
+            eprintln!("no default output device; skipping");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let tone = dir.path().join("tone.wav");
+        let status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=2",
+                "-ac",
+                "2",
+            ])
+            .arg(&tone)
+            .status()
+            .expect("run ffmpeg");
+        assert!(status.success(), "could not generate the tone fixture");
+
+        let mut monitor =
+            AudioMonitor::start(Path::new("ffmpeg"), &tone, 0.0).expect("start audio monitoring");
+        std::thread::sleep(Duration::from_millis(300));
+        monitor.shared.lock().expect("audio monitor poisoned").error =
+            Some("simulated device loss".to_string());
+        assert!(
+            monitor.supervise(0.3),
+            "supervisor should rebuild after an output error"
+        );
+        assert_eq!(monitor.rebuilds(), 1);
+        std::thread::sleep(Duration::from_millis(500));
+        let frames = monitor.played_frames();
+        let diagnostic = monitor.diagnostic();
+        monitor.stop();
+        assert!(frames > 0, "rebuilt output callback consumed no frames");
+        assert!(
+            diagnostic.is_none(),
+            "rebuilt output reported {diagnostic:?}"
+        );
     }
 }

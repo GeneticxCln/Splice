@@ -20,7 +20,10 @@ Splice is fully offline: no network calls, telemetry, uploads or auto-update.
 - Voiceover recording from the default input through cpal.
 - Split, trim, duplicate, reorder, multi-select-free inspector editing, and
   snapshot undo/redo with gesture coalescing.
-- Proxy preview (960 × 540) with soundtrack monitoring on the default output.
+- Proxy preview (960 × 540) with soundtrack monitoring on the default output;
+  the output stream reopens after device errors and resumes at the playhead.
+- Title fonts are validated through fontconfig, with a warning when libass would
+  substitute a different family.
 - Atomic `.splice` saves and a versioned JSON project format.
 - Locked H.264/AAC export presets (1080p, 720p, 480p); the same encoder runs
   from the GUI and the CLI.
@@ -29,7 +32,7 @@ Splice is fully offline: no network calls, telemetry, uploads or auto-update.
 ## Requirements
 
 - Linux with Wayland or X11 and working OpenGL (eframe/glow).
-- Rust 1.85 or newer.
+- Rust 1.85 or newer (edition 2024).
 - System `ffmpeg` and `ffprobe` with the `libx264` and `aac` encoders.
 - DejaVu fonts for the UI and the default title look. Other installed fonts are
   offered in the title editor.
@@ -111,6 +114,7 @@ refused rather than guessed.
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
+bash scripts/check-msrv.sh   # requires rustup and Rust 1.85.0
 ```
 
 The deterministic suite covers the project round-trip, version refusal, offline

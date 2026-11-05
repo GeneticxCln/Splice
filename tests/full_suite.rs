@@ -13,18 +13,18 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 use splice::automovie::{self, AutoMovieOptions};
-use splice::catalog::{make_effect, EFFECTS, EFFECT_CATEGORIES, TITLE_STYLES, TRANSITIONS};
+use splice::catalog::{EFFECT_CATEGORIES, EFFECTS, TITLE_STYLES, TRANSITIONS, make_effect};
 use splice::edit;
 use splice::export::export_project;
 use splice::ffmpeg::Toolchain;
 use splice::library::{import_media, relink_media};
 use splice::model::{
-    default_clip_for, AudioParams, EffectKind, MediaAsset, MediaKind, Project, Title, TitleStyle,
-    Transition, TransitionKind,
+    AudioParams, EffectKind, MediaAsset, MediaKind, Project, Title, TitleStyle, Transition,
+    TransitionKind, default_clip_for,
 };
 use splice::presets::ExportPreset;
 use splice::project_io::{load_project, save_project};
-use splice::render::{render_project, RenderOptions};
+use splice::render::{RenderOptions, render_project};
 use tempfile::TempDir;
 
 struct Fixtures {
@@ -383,10 +383,12 @@ fn project_roundtrip_is_versioned_and_rejects_newer_files() {
     let envelope: serde_json::Value = serde_json::from_str(&text).expect("json");
     assert_eq!(envelope["format"], "splice-project");
     assert_eq!(envelope["version"], 1);
-    assert!(envelope["media"][0]["path"]
-        .as_str()
-        .unwrap()
-        .starts_with("one.mp4"));
+    assert!(
+        envelope["media"][0]["path"]
+            .as_str()
+            .unwrap()
+            .starts_with("one.mp4")
+    );
 
     let loaded = load_project(&path).expect("load project");
     assert_eq!(loaded.project.media, before.media);
@@ -603,13 +605,15 @@ fn automovie_builds_titles_transitions_and_music() {
         report.primary_duration,
         music.duration
     );
-    assert!(project
-        .primary_video_track()
-        .unwrap()
-        .clips
-        .iter()
-        .skip(1)
-        .all(|clip| clip.transition.is_some()));
+    assert!(
+        project
+            .primary_video_track()
+            .unwrap()
+            .clips
+            .iter()
+            .skip(1)
+            .all(|clip| clip.transition.is_some())
+    );
     assert_eq!(project.title_clips().len(), 2);
     let music_track = project
         .tracks

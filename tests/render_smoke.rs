@@ -6,8 +6,8 @@ use splice::export::export_project;
 use splice::ffmpeg::Toolchain;
 use splice::library::import_media;
 use splice::model::{
-    default_clip_for, AudioParams, EffectKind, MediaKind, Project, Title, Transition,
-    TransitionKind,
+    AudioParams, EffectKind, MediaKind, Project, Title, Transition, TransitionKind,
+    default_clip_for,
 };
 use splice::presets::ExportPreset;
 use tempfile::TempDir;

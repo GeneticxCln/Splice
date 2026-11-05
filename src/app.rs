@@ -12,19 +12,20 @@ use crate::audio::{Recorder, RecordingStats};
 use crate::automovie::{self, AutoMovieOptions};
 use crate::catalog::{self, EFFECTS, FONTS, PALETTE, TITLE_STYLES, TRANSITIONS};
 use crate::edit;
-use crate::export::{export_project, ExportReport};
+use crate::export::{ExportReport, export_project};
 use crate::ffmpeg::Toolchain;
 use crate::history::History;
 use crate::library;
 use crate::model::{
-    new_id, resolve_media_path, AudioParams, MediaAsset, MediaKind, Project, Title, TrackKind,
-    Transition,
+    AudioParams, MediaAsset, MediaKind, Project, Title, TrackKind, Transition, new_id,
+    resolve_media_path,
 };
 use crate::presets::ExportPreset;
 use crate::preview::Preview;
 use crate::project_io::{load_project, save_project};
 use crate::theme;
 use crate::timeline_ui::{self, TimelineAction, TimelineCommand, TimelineUiState, TimelineView};
+use crate::titles;
 
 #[derive(Debug, Clone, Default)]
 pub struct AppOptions {
@@ -223,16 +224,27 @@ impl SpliceApp {
             app.seek_to(initial_playhead);
         }
 
+        let capability_warnings = app
+            .tools
+            .as_ref()
+            .map(Toolchain::capability_warnings)
+            .unwrap_or_default();
         app.status = match &app.tools {
-            Some(_) => format!(
+            Some(_) if capability_warnings.is_empty() => format!(
                 "Ready — {} media · {} clips · ffmpeg detected",
                 app.project.media.len(),
                 app.clip_count()
             ),
+            Some(_) => format!(
+                "Ready — {} media · {} clips · missing: {}",
+                app.project.media.len(),
+                app.clip_count(),
+                capability_warnings.join("; ")
+            ),
             None => "ffmpeg/ffprobe were not found on PATH; preview and export are unavailable"
                 .to_string(),
         };
-        app.status_error = app.tools.is_none();
+        app.status_error = app.tools.is_none() || !capability_warnings.is_empty();
         Ok(app)
     }
 
@@ -1262,10 +1274,17 @@ impl SpliceApp {
                     });
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let (label, color) = if self.tools.is_some() {
+                        let warnings = self
+                            .tools
+                            .as_ref()
+                            .map(Toolchain::capability_warnings)
+                            .unwrap_or_default();
+                        let (label, color) = if self.tools.is_none() {
+                            ("FFMPEG MISSING", theme::DANGER)
+                        } else if warnings.is_empty() {
                             ("FFMPEG READY", theme::GREEN)
                         } else {
-                            ("FFMPEG MISSING", theme::DANGER)
+                            ("FFMPEG LIMITED", theme::GOLD)
                         };
                         let response = ui.label(
                             RichText::new(format!("● {label}"))
@@ -1274,7 +1293,16 @@ impl SpliceApp {
                                 .color(color),
                         );
                         if let Some(tools) = &self.tools {
-                            response.on_hover_text(tools.version_summary());
+                            let summary = if warnings.is_empty() {
+                                tools.version_summary()
+                            } else {
+                                format!(
+                                    "{}\nMissing: {}",
+                                    tools.version_summary(),
+                                    warnings.join("; ")
+                                )
+                            };
+                            response.on_hover_text(summary);
                         } else if let Some(error) = &self.tool_error {
                             response.on_hover_text(error);
                         }
@@ -3591,6 +3619,9 @@ fn title_editor(ui: &mut Ui, title: &mut Title, changed: &mut bool) {
             *changed = true;
         }
     });
+    if let Some(warning) = titles::font_fallback_warning(&title.font) {
+        ui.label(RichText::new(warning).size(9.5).color(theme::ACCENT));
+    }
 
     let response = ui.add(
         egui::Slider::new(&mut title.size, 12.0..=180.0)

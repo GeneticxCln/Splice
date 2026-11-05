@@ -1,7 +1,7 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::model::{
-    default_clip_for, new_id, Clip, MediaAsset, MediaKind, Project, Title, TrackKind,
+    Clip, MediaAsset, MediaKind, Project, Title, TrackKind, default_clip_for, new_id,
 };
 
 /// Sequential reflow that preserves the vector order rather than sorting by

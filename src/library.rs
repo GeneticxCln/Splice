@@ -1,9 +1,9 @@
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::ffmpeg::{ProbeInfo, Toolchain};
-use crate::model::{new_id, stored_media_path, MediaAsset, MediaKind, Project, SAMPLE_RATE};
+use crate::model::{MediaAsset, MediaKind, Project, SAMPLE_RATE, new_id, stored_media_path};
 
 /// Probes a real file through system ffprobe and appends it to the media
 /// library. The source file is only read.

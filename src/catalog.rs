@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::model::{new_id, EffectInstance, EffectKind, TitleStyle, TransitionKind};
+use crate::model::{EffectInstance, EffectKind, TitleStyle, TransitionKind, new_id};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParamDef {

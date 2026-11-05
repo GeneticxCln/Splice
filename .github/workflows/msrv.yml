@@ -1,0 +1,26 @@
+name: MSRV
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxrandr-dev
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Check the declared MSRV
+        run: cargo check --all-targets --locked

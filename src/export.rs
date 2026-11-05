@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::ffmpeg::Toolchain;
 use crate::model::resolve_media_path;
 use crate::presets::ExportPreset;
-use crate::render::{render_project, RenderOptions};
+use crate::render::{RenderOptions, render_project};
 
 #[derive(Debug, Clone)]
 pub struct ExportReport {

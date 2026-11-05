@@ -8,14 +8,14 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use splice::catalog::make_effect;
 use splice::edit;
 use splice::ffmpeg::Toolchain;
 use splice::library::import_media;
 use splice::model::{
-    default_clip_for, AudioParams, EffectKind, Project, Title, Transition, TransitionKind,
+    AudioParams, EffectKind, Project, Title, Transition, TransitionKind, default_clip_for,
 };
 use splice::project_io::save_project;
 

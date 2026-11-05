@@ -1,8 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::edit::reflow_primary_ordered;
 use crate::model::{
-    default_clip_for, new_id, AudioParams, Project, Title, Transition, TransitionKind,
+    AudioParams, Project, Title, Transition, TransitionKind, default_clip_for, new_id,
 };
 
 #[derive(Debug, Clone)]

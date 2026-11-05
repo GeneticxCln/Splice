@@ -5,14 +5,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
-use crossbeam_channel::{bounded, Receiver};
+use anyhow::{Context, Result, bail};
+use crossbeam_channel::{Receiver, bounded};
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 
 use crate::audio::AudioMonitor;
 use crate::ffmpeg::Toolchain;
 use crate::model::Project;
-use crate::render::{render_project, RenderOptions};
+use crate::render::{RenderOptions, render_project};
 
 pub const PREVIEW_WIDTH: u32 = 960;
 pub const PREVIEW_HEIGHT: u32 = 540;
@@ -305,6 +305,15 @@ impl Preview {
         if self.playing {
             let elapsed = self.play_started.elapsed().as_secs_f64();
             self.playhead = (self.play_start_time + elapsed).min(timeline_duration);
+            if let Some(audio) = self.audio.as_mut() {
+                let rebuilt = audio.supervise(self.playhead);
+                if rebuilt {
+                    self.audio_error = None;
+                }
+                if let Some(error) = audio.diagnostic() {
+                    self.audio_error = Some(format!("audio monitoring: {error}"));
+                }
+            }
             self.pull_playback_frame(ctx);
             if self.playhead >= timeline_duration - 0.001 {
                 self.playhead = timeline_duration;
