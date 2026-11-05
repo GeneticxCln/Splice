@@ -8,6 +8,56 @@ use anyhow::{Context, Result};
 
 use crate::model::{Clip, Project, Title, TitleStyle};
 
+const SHORTS_SAFE_SIDE: f32 = 0.15;
+const SHORTS_SAFE_TOP: f32 = 0.10;
+const SHORTS_SAFE_BOTTOM: f32 = 0.20;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SafeArea {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+impl SafeArea {
+    fn shorts(width: u32, height: u32) -> Self {
+        let width = width as f32;
+        let height = height as f32;
+        Self {
+            left: width * SHORTS_SAFE_SIDE,
+            top: height * SHORTS_SAFE_TOP,
+            right: width * (1.0 - SHORTS_SAFE_SIDE),
+            bottom: height * (1.0 - SHORTS_SAFE_BOTTOM),
+        }
+    }
+
+    fn width(self) -> f32 {
+        self.right - self.left
+    }
+
+    fn height(self) -> f32 {
+        self.bottom - self.top
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TitleLayout {
+    style_font_size: f32,
+    event_font_size: f32,
+    text: String,
+    max_line_width: f32,
+    block_height: f32,
+    motion_scale: f32,
+    safe: Option<SafeArea>,
+}
+
+struct WrappedText {
+    text: String,
+    max_line_width: f32,
+    block_height: f32,
+}
+
 /// Builds an ASS subtitle file for every title clip in the project. ASS is
 /// rendered by ffmpeg's libass filter and is the single title renderer for both
 /// preview and export, so the two paths cannot drift apart.
@@ -16,6 +66,11 @@ pub fn write_ass(project: &Project, width: u32, height: u32, path: &Path) -> Res
     if titles.is_empty() {
         return Ok(false);
     }
+    let layouts: Vec<TitleLayout> = titles
+        .iter()
+        .filter_map(|clip| clip.title.as_ref())
+        .map(|title| layout_title(title, width, height))
+        .collect();
 
     let mut ass = String::new();
     writeln!(ass, "[Script Info]")?;
@@ -36,7 +91,7 @@ pub fn write_ass(project: &Project, width: u32, height: u32, path: &Path) -> Res
         let Some(title) = &clip.title else {
             continue;
         };
-        let style = style_line(index, title, width, height);
+        let style = style_line(index, title, &layouts[index]);
         writeln!(ass, "{style}")?;
     }
 
@@ -51,7 +106,7 @@ pub fn write_ass(project: &Project, width: u32, height: u32, path: &Path) -> Res
         let Some(title) = &clip.title else {
             continue;
         };
-        let event = event_line(index, clip, title, width, height);
+        let event = event_line(index, clip, title, &layouts[index], width, height);
         writeln!(ass, "{event}")?;
     }
 
@@ -64,9 +119,8 @@ pub fn write_ass(project: &Project, width: u32, height: u32, path: &Path) -> Res
     Ok(true)
 }
 
-fn style_line(index: usize, title: &Title, output_width: u32, output_height: u32) -> String {
-    let scale = font_scale(output_width, output_height);
-    let font_size = (title.size.max(8.0) * scale).round().max(8.0);
+fn style_line(index: usize, title: &Title, layout: &TitleLayout) -> String {
+    let font_size = layout.style_font_size;
     let font = if title.font.trim().is_empty() {
         "DejaVu Sans"
     } else {
@@ -87,14 +141,19 @@ fn style_line(index: usize, title: &Title, output_width: u32, output_height: u32
     )
 }
 
-fn event_line(index: usize, clip: &Clip, title: &Title, width: u32, height: u32) -> String {
+fn event_line(
+    index: usize,
+    clip: &Clip,
+    title: &Title,
+    layout: &TitleLayout,
+    width: u32,
+    height: u32,
+) -> String {
     let duration = clip.duration().max(0.05);
     let start = fmt_time(clip.start.max(0.0));
     let end = fmt_time(clip.start.max(0.0) + duration);
-    let scale = font_scale(width, height);
-    let size = (title.size.max(8.0) * scale).max(8.0);
-    let x = (title.position_x.clamp(0.0, 1.0) * width as f32).round();
-    let y = (title.position_y.clamp(0.0, 1.0) * height as f32).round();
+    let size = layout.event_font_size;
+    let (x, y) = title_position(title, layout, width, height);
     let intro = (duration.min(0.55) * 0.8 * 1000.0) as i64;
     let outro = (duration.min(0.55) * 0.8 * 1000.0) as i64;
     let dur_ms = (duration * 1000.0) as i64;
@@ -149,17 +208,16 @@ fn event_line(index: usize, clip: &Clip, title: &Title, width: u32, height: u32)
             );
         }
         TitleStyle::LowerThird => {
-            let start_x = (width as f32 * 0.04).max(40.0);
-            let lower_y = if height > width {
-                height as f32 * 0.72
+            let (start_x, lower_y) = if layout.safe.is_some() {
+                (x, y)
             } else {
-                height as f32 * 0.84
+                ((width as f32 * 0.04).max(40.0), height as f32 * 0.84)
             };
             let _ = write!(
                 tags,
                 "\\an4\\move({start_x:.0},{:.0},{start_x:.0},{:.0},0,480)\\fad({intro},{outro})",
-                lower_y.round() + 85.0,
-                lower_y.round()
+                lower_y + 85.0,
+                lower_y
             );
         }
         TitleStyle::CreditRoll => {
@@ -184,17 +242,259 @@ fn event_line(index: usize, clip: &Clip, title: &Title, width: u32, height: u32)
         }
     }
 
+    let text = &layout.text;
+
+    format!("Dialogue: 0,{start},{end},Title{index},,0,0,0,,{{{tags}}}{text}")
+}
+
+fn layout_title(title: &Title, width: u32, height: u32) -> TitleLayout {
+    let scale = font_scale(width, height);
+    let base_size = (title.size.max(8.0) * scale).round().max(8.0);
+    if width >= height {
+        return TitleLayout {
+            style_font_size: base_size,
+            event_font_size: (title.size.max(8.0) * scale).max(8.0),
+            text: title_text(title, (title.size.max(8.0) * scale).max(8.0) * 0.52, false),
+            max_line_width: 0.0,
+            block_height: 0.0,
+            motion_scale: 1.0,
+            safe: None,
+        };
+    }
+
+    let safe = SafeArea::shorts(width, height);
+    let motion = motion_scale(title.style);
+    let mut font_size = base_size;
+    let mut wrapped = wrap_title(title, safe.width(), font_size);
+    // Long Shorts titles shrink only as much as needed to keep the complete
+    // block inside the title-safe column and above the platform overlays.
+    for _ in 0..12 {
+        if wrapped.max_line_width * motion <= safe.width() + 0.5
+            && wrapped.block_height * motion <= safe.height() + 0.5
+        {
+            break;
+        }
+        if font_size <= 8.0 {
+            break;
+        }
+        font_size = (font_size * 0.9).max(8.0);
+        wrapped = wrap_title(title, safe.width(), font_size);
+    }
+
+    TitleLayout {
+        style_font_size: font_size,
+        event_font_size: font_size,
+        text: wrapped.text,
+        max_line_width: wrapped.max_line_width,
+        block_height: wrapped.block_height,
+        motion_scale: motion,
+        safe: Some(safe),
+    }
+}
+
+fn title_text(title: &Title, subtitle_size: f32, reset_spacing: bool) -> String {
     let mut text = sanitize_text(&title.text);
     if !title.subtitle.trim().is_empty() {
+        let reset = if reset_spacing { "\\fsp0" } else { "" };
         let _ = write!(
             text,
-            "\\N{{\\fs{:.0}\\alpha&H20&}}{}",
-            size * 0.52,
+            "\\N{{\\fs{subtitle_size:.0}\\alpha&H20&{reset}}}{}",
             sanitize_text(&title.subtitle)
         );
     }
+    text
+}
 
-    format!("Dialogue: 0,{start},{end},Title{index},,0,0,0,,{{{tags}}}{text}")
+fn wrap_title(title: &Title, max_width: f32, font_size: f32) -> WrappedText {
+    let spacing = if title.style == TitleStyle::Tracking {
+        font_size * 0.35
+    } else {
+        0.0
+    };
+    let title_lines = wrap_lines(&title.text, max_width, font_size, title.bold, spacing);
+    let subtitle_size = font_size * 0.52;
+    let subtitle_lines = if title.subtitle.trim().is_empty() {
+        Vec::new()
+    } else {
+        wrap_lines(&title.subtitle, max_width, subtitle_size, title.bold, 0.0)
+    };
+
+    let mut text = title_lines.join("\\N");
+    if !subtitle_lines.is_empty() {
+        if !text.is_empty() {
+            text.push_str("\\N");
+        }
+        let _ = write!(
+            text,
+            "{{\\fs{subtitle_size:.0}\\alpha&H20&\\fsp0}}{}",
+            subtitle_lines.join("\\N")
+        );
+    }
+
+    let title_width = title_lines
+        .iter()
+        .map(|line| line_width(line, font_size, title.bold, spacing))
+        .fold(0.0_f32, f32::max);
+    let subtitle_width = subtitle_lines
+        .iter()
+        .map(|line| line_width(line, subtitle_size, title.bold, 0.0))
+        .fold(0.0_f32, f32::max);
+    let block_height = title_lines.len() as f32 * font_size * 1.2
+        + subtitle_lines.len() as f32 * subtitle_size * 1.2;
+
+    WrappedText {
+        text,
+        max_line_width: title_width.max(subtitle_width),
+        block_height,
+    }
+}
+
+fn wrap_lines(text: &str, max_width: f32, font_size: f32, bold: bool, spacing: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    for raw_line in text.split('\n') {
+        let clean = sanitize_text(raw_line);
+        lines.extend(wrap_paragraph(&clean, max_width, font_size, bold, spacing));
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn wrap_paragraph(
+    paragraph: &str,
+    max_width: f32,
+    font_size: f32,
+    bold: bool,
+    spacing: f32,
+) -> Vec<String> {
+    let words: Vec<&str> = paragraph.split_whitespace().collect();
+    if words.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in words {
+        if line_width(word, font_size, bold, spacing) > max_width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            let chunks = break_word(word, max_width, font_size, bold, spacing);
+            let last = chunks.len().saturating_sub(1);
+            for (index, chunk) in chunks.into_iter().enumerate() {
+                if index == last {
+                    current = chunk;
+                } else {
+                    lines.push(chunk);
+                }
+            }
+            continue;
+        }
+
+        let candidate = if current.is_empty() {
+            word.to_string()
+        } else {
+            format!("{current} {word}")
+        };
+        if current.is_empty() || line_width(&candidate, font_size, bold, spacing) <= max_width {
+            current = candidate;
+        } else {
+            lines.push(std::mem::replace(&mut current, word.to_string()));
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+fn break_word(word: &str, max_width: f32, font_size: f32, bold: bool, spacing: f32) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for character in word.chars() {
+        let mut candidate = current.clone();
+        candidate.push(character);
+        if !current.is_empty() && line_width(&candidate, font_size, bold, spacing) > max_width {
+            chunks.push(std::mem::take(&mut current));
+        }
+        current.push(character);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+fn line_width(line: &str, font_size: f32, bold: bool, spacing: f32) -> f32 {
+    let mut characters = 0usize;
+    let mut em = 0.0_f32;
+    for character in line.chars() {
+        characters += 1;
+        em += glyph_em(character);
+    }
+    if characters == 0 {
+        return 0.0;
+    }
+    let weight = if bold { 1.04 } else { 1.0 };
+    em * font_size * weight + spacing * characters as f32
+}
+
+fn glyph_em(character: char) -> f32 {
+    match character {
+        ' ' | '\t' => 0.30,
+        '\'' | '"' | '`' | '.' | ',' | ':' | ';' | '!' | '|' => 0.30,
+        'i' | 'l' | 'I' | 'j' | 't' | 'f' | 'r' => 0.36,
+        'm' | 'w' | 'M' | 'W' => 0.82,
+        'A'..='Z' => 0.68,
+        '0'..='9' => 0.58,
+        character if character.is_ascii() => 0.56,
+        _ => 1.0,
+    }
+}
+
+fn motion_scale(style: TitleStyle) -> f32 {
+    match style {
+        TitleStyle::Pop => 1.06,
+        TitleStyle::Pulse => 1.04,
+        TitleStyle::SpinIn => 1.12,
+        _ => 1.0,
+    }
+}
+
+fn title_position(title: &Title, layout: &TitleLayout, width: u32, height: u32) -> (f32, f32) {
+    let requested_x = (title.position_x.clamp(0.0, 1.0) * width as f32).round();
+    let requested_y = (title.position_y.clamp(0.0, 1.0) * height as f32).round();
+    let Some(safe) = layout.safe else {
+        return (requested_x, requested_y);
+    };
+
+    let half_width = (layout.max_line_width * layout.motion_scale * 0.5).min(safe.width() * 0.5);
+    let half_height = (layout.block_height * layout.motion_scale * 0.5).min(safe.height() * 0.5);
+
+    if title.style == TitleStyle::LowerThird {
+        return (
+            safe.left.round(),
+            clamp_center(height as f32 * 0.72, safe.top, safe.bottom, half_height),
+        );
+    }
+    if title.style == TitleStyle::CreditRoll {
+        return (
+            clamp_center(requested_x, safe.left, safe.right, half_width),
+            requested_y,
+        );
+    }
+
+    (
+        clamp_center(requested_x, safe.left, safe.right, half_width),
+        clamp_center(requested_y, safe.top, safe.bottom, half_height),
+    )
+}
+
+fn clamp_center(value: f32, min: f32, max: f32, half: f32) -> f32 {
+    let low = (min + half).min(max - half);
+    let high = (max - half).max(min + half);
+    value.clamp(low, high).round()
 }
 
 /// Returns a warning when fontconfig resolves `font` to a different family,
@@ -299,6 +599,68 @@ mod tests {
         assert!((font_scale(1920, 1080) - 1.0).abs() < 1e-6);
         assert!((font_scale(1080, 1920) - 1.0).abs() < 1e-6);
         assert!((font_scale(1280, 720) - (2.0 / 3.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn portrait_titles_wrap_inside_the_safe_column() {
+        let mut title = Title::opening("Long Short");
+        title.text =
+            "AUTOMATIC TITLE WRAPPING KEEPS LONG HEADLINES INSIDE THE VERTICAL SAFE COLUMN".into();
+        title.subtitle = "Subtitles use the same safe width and remain readable".into();
+        title.position_x = 0.0;
+        title.position_y = 0.0;
+
+        let layout = layout_title(&title, 1080, 1920);
+        let safe = layout.safe.expect("portrait layout must have a safe area");
+        assert!(layout.text.contains("\\N"), "long text must wrap");
+        assert!(
+            layout.max_line_width * layout.motion_scale <= safe.width() + 1.0,
+            "wrapped lines must fit the safe column"
+        );
+        assert!(
+            layout.block_height * layout.motion_scale <= safe.height() + 1.0,
+            "the title block must fit the safe height"
+        );
+
+        let (x, y) = title_position(&title, &layout, 1080, 1920);
+        let half_width = layout.max_line_width * layout.motion_scale * 0.5;
+        let half_height = layout.block_height * layout.motion_scale * 0.5;
+        assert!(x - half_width >= safe.left - 1.0);
+        assert!(x + half_width <= safe.right + 1.0);
+        assert!(y - half_height >= safe.top - 1.0);
+        assert!(y + half_height <= safe.bottom + 1.0);
+    }
+
+    #[test]
+    fn portrait_lower_third_starts_at_the_safe_left_edge() {
+        let mut title = Title::opening("Lower Third");
+        title.style = TitleStyle::LowerThird;
+        title.text = "A LOWER THIRD WITH ENOUGH TEXT TO WRAP SAFELY".into();
+        title.position_x = 0.95;
+        title.position_y = 0.99;
+
+        let layout = layout_title(&title, 1080, 1920);
+        let safe = layout.safe.expect("portrait layout must have a safe area");
+        let (x, y) = title_position(&title, &layout, 1080, 1920);
+        let half_height = layout.block_height * layout.motion_scale * 0.5;
+        assert!((x - safe.left).abs() < 1.0);
+        assert!(y + half_height <= safe.bottom + 1.0);
+    }
+
+    #[test]
+    fn landscape_titles_keep_the_legacy_layout() {
+        let mut title = Title::opening("Landscape");
+        title.text = "THIS LANDSCAPE TITLE IS LONG BUT MUST NOT WRAP".into();
+        title.subtitle.clear();
+        title.position_x = 0.2;
+        title.position_y = 0.7;
+
+        let layout = layout_title(&title, 1920, 1080);
+        assert!(layout.safe.is_none());
+        assert_eq!(layout.text, title.text);
+        assert_eq!(layout.style_font_size, 96.0);
+        assert_eq!(layout.event_font_size, 96.0);
+        assert_eq!(title_position(&title, &layout, 1920, 1080), (384.0, 756.0));
     }
 
     #[test]

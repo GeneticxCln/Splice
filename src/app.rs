@@ -3831,10 +3831,11 @@ fn fit_rect(bounds: Rect, aspect: f32) -> Rect {
 }
 
 fn paint_short_safe_areas(painter: &egui::Painter, frame: Rect) {
+    let left = frame.left() + frame.width() * 0.15;
     let top = frame.top() + frame.height() * 0.10;
     let bottom = frame.bottom() - frame.height() * 0.20;
     let right = frame.right() - frame.width() * 0.15;
-    let safe = Rect::from_min_max(egui::pos2(frame.left(), top), egui::pos2(right, bottom));
+    let safe = Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom));
     let shade = Color32::from_black_alpha(35);
     painter.rect_filled(
         Rect::from_min_max(frame.min, egui::pos2(frame.right(), top)),
@@ -3843,6 +3844,14 @@ fn paint_short_safe_areas(painter: &egui::Painter, frame: Rect) {
     );
     painter.rect_filled(
         Rect::from_min_max(egui::pos2(frame.left(), bottom), frame.max),
+        egui::CornerRadius::ZERO,
+        shade,
+    );
+    painter.rect_filled(
+        Rect::from_min_max(
+            egui::pos2(frame.left(), frame.top()),
+            egui::pos2(left, frame.bottom()),
+        ),
         egui::CornerRadius::ZERO,
         shade,
     );

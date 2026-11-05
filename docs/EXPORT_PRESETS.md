@@ -62,6 +62,16 @@ removes the temporary partial file. Export is refused, with no output file, when
 Shorts presets use 9:16 dimensions accepted by both YouTube Shorts and TikTok.
 The same exported file can be uploaded to either platform.
 
+## Title safety on 9:16
+
+Portrait projects lay titles out inside a 70% wide safe column with 15% side
+margins. Static titles are clamped between the 10% top and 80% bottom bounds,
+leaving the lower 20% for platform controls. Long headlines and subtitles wrap
+automatically; a block that is still too tall is reduced only enough to fit the
+safe area. Lower thirds start at the safe left edge and credit rolls keep the
+same safe width while continuing to scroll vertically. These rules apply only to
+portrait canvases, so existing landscape title output is unchanged.
+
 ## GUI
 
 `Export Movie` groups landscape and Shorts presets and calls the same

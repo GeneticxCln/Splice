@@ -545,3 +545,73 @@ cargo +1.88.0 check --all-targets --locked          exit 0 (13.55s)
 ```
 
 Gate status: PASS.
+
+## Slice 12 — Shorts title safety and screenshot
+
+Date: 2026-11-05. Version: 1.2.0. Working tree:
+`/home/quinton/Projects/Splice`.
+
+Portrait titles now wrap to a 70% wide safe column (15% side margins) and are
+clamped between the 10% top and 80% bottom bounds, leaving the lower 20% for
+platform controls. Lower thirds start at the safe left edge; credit rolls keep
+the safe width while continuing to scroll. Landscape layout is unchanged, and
+the unit test `landscape_titles_keep_the_legacy_layout` asserts that no wrapping
+or safe-area clamping is applied there.
+
+Focused title tests:
+
+```text
+$ cargo test --lib titles::tests -- --nocapture
+running 8 tests
+test titles::tests::portrait_titles_wrap_inside_the_safe_column ... ok
+test titles::tests::portrait_lower_third_starts_at_the_safe_left_edge ... ok
+test titles::tests::landscape_titles_keep_the_legacy_layout ... ok
+...
+test result: ok. 8 passed; 0 failed; 0 ignored
+```
+
+Full gate:
+
+```text
+cargo fmt --check                                      exit 0
+cargo clippy --all-targets --locked -- -D warnings     exit 0
+cargo test --locked                                    exit 0
+cargo build --release --locked                         exit 0
+
+unittests src/lib.rs          12 passed; 3 ignored (hardware audio)
+tests/full_suite.rs            9 passed; 0 failed
+tests/render_smoke.rs          3 passed; 0 failed
+```
+
+The Shorts screenshot was captured from a temporary 9:16 derivative of
+`docs/demo.splice` (media paths made absolute, `framing=fill`):
+
+```text
+SHORT_PROJECT_OK settings= {'width': 1080, 'height': 1920, 'fps': 30, 'sample_rate': 48000, 'background': '#0d1016', 'framing': 'fill'}
+SCREENSHOT_OK /home/quinton/Projects/Splice/docs/shorts.png 1913x2058
+```
+
+`docs/shorts.png` is a real eframe framebuffer capture of the running Splice
+window at playhead 2.5 s. The preview is `540x960`, the safe-area border and
+side shades are visible, and the demo title/subtitle wrap inside the safe
+column. The large `SPLICE DEM` text at the bottom is baked into the source
+footage and is intentionally center-cropped by Fill; it is not the editable
+title overlay.
+
+The encoded path was checked independently:
+
+```text
+$ ./target/release/splice export --project /tmp/splice-shorts-demo.splice \
+    --preset shorts-1080p --output /tmp/splice-short-title-check.mp4
+EXPORT_OK /tmp/splice-short-title-check.mp4 preset=shorts-1080p duration=21.50s
+codec_name=h264
+width=1080
+height=1920
+level=41
+r_frame_rate=30/1
+```
+
+The extracted frame at 2.5 s shows `Splice Demo Reel` as two wrapped lines and
+the subtitle inside the safe column, so the preview and export paths agree.
+
+Gate status: PASS.

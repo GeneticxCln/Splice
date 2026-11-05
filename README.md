@@ -8,6 +8,10 @@ Projects are versioned JSON documents with the `.splice` extension.
 
 ![Splice editing the demo project](docs/screenshot.png)
 
+Splice's 9:16 Shorts workspace uses a title-safe column and platform-overlay guides:
+
+![Splice Shorts mode](docs/shorts.png)
+
 ## Features
 
 - Storyboard and four-track timeline: Video 1, Overlay, Music, Voiceover.
@@ -19,7 +23,8 @@ Projects are versioned JSON documents with the `.splice` extension.
 - Atomic saves and a versioned project format.
 - Landscape and 9:16 Shorts presets for YouTube Shorts and TikTok.
 - 1080p, 720p, and 480p H.264/AAC presets shared by the GUI and CLI.
-- Shorts mode with fill/fit framing and safe-area guides.
+- Shorts mode with fill/fit framing, safe-area guides, and automatic title
+  wrapping/clamping.
 
 ## Requirements
 
