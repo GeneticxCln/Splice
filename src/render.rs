@@ -264,8 +264,7 @@ pub fn render_project(
 
     let final_label = used_labels.next("vout");
     filters.push(format!(
-        "[{composed}]trim=duration={:.3},setpts=PTS-STARTPTS,format=yuv420p[{final_label}]",
-        timeline
+        "[{composed}]trim=duration={timeline:.3},setpts=PTS-STARTPTS,format=yuv420p[{final_label}]"
     ));
 
     // Audio mix.

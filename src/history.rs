@@ -25,7 +25,7 @@ impl History {
             .last_checkpoint
             .map(|last| now.duration_since(last) < COALESCE_WINDOW)
             .unwrap_or(false);
-        if !(coalesce && !self.undo.is_empty()) {
+        if !coalesce || self.undo.is_empty() {
             self.undo.push(snapshot);
             if self.undo.len() > MAX_UNDO {
                 self.undo.remove(0);

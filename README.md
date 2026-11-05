@@ -1,5 +1,7 @@
 # Splice
 
+[![CI](https://github.com/GeneticxCln/Splice/actions/workflows/ci.yml/badge.svg)](https://github.com/GeneticxCln/Splice/actions/workflows/ci.yml) [![MSRV](https://github.com/GeneticxCln/Splice/actions/workflows/msrv.yml/badge.svg)](https://github.com/GeneticxCln/Splice/actions/workflows/msrv.yml) [![Release](https://img.shields.io/github/v/release/GeneticxCln/Splice)](https://github.com/GeneticxCln/Splice/releases)
+
 Splice is a Linux timeline video editor written in Rust with egui/eframe. It
 uses system ffmpeg for media probing, proxy preview, and H.264/AAC export.
 Projects are versioned JSON documents with the `.splice` extension.
