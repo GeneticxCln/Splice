@@ -389,3 +389,48 @@ audio gate, and the remaining product limitations.
 The initial commit is `38dbfa0` ("Initial commit: Splice native Linux timeline
 editor"). The two hardware audio gates are `#[ignore]` by design so `cargo test`
 stays deterministic on headless machines; both were run explicitly above.
+
+## Slice 8 — full transition and effect catalogs
+
+The artificial 10-transition / 10-effect cap is gone. `TransitionKind` now
+exposes all 58 `xfade` transitions reported by the installed ffmpeg n9.0.2
+(IDs 0–57, excluding `custom`), and `EffectKind` exposes 38 effects backed by
+real ffmpeg filters. Enum values for the original catalog entries are unchanged
+and the project schema remains version 1, so existing `.splice` files still
+load.
+
+Catalog completeness gate:
+
+```text
+$ cargo test --test full_suite catalog_and_presets_are_complete
+running 1 test
+test catalog_and_presets_are_complete ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured
+```
+
+The test checks `TRANSITIONS.len() == TransitionKind::ALL.len()`,
+`EFFECTS.len() == EffectKind::ALL.len()`, that every enum variant appears in the
+catalog, that xfade names and effect kinds are unique, and that every effect
+parameter set materializes without duplicate keys. Title styles remain at 10.
+
+Rendering gate — the rewritten matrix test builds one project containing all 58
+transitions and another containing all 38 effects, renders both at 480×270 in
+preview mode through the same render graph used by the GUI, and probes h264 at
+480×270:
+
+```text
+$ cargo test --test full_suite feature_matrix_renders_all_transitions_effects_and_titles
+test feature_matrix_renders_all_transitions_effects_and_titles ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; finished in 11.94s
+```
+
+Full gate after the change:
+
+```text
+cargo fmt --check                                    exit 0
+cargo clippy --all-targets -- -D warnings           exit 0
+cargo test      6 passed + 2 ignored (lib), 8 passed (full_suite), 2 passed (render_smoke); 0 failed
+```
+
+The two ignored tests are the existing hardware audio gates from Slice 6.
+Gate status: PASS.

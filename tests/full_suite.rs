@@ -273,37 +273,63 @@ fn rich_project(f: &Fixtures, tools: &Toolchain) -> (Project, PathBuf) {
 
 #[test]
 fn catalog_and_presets_are_complete() {
-    assert_eq!(TRANSITIONS.len(), 10, "ten transitions are required");
-    assert_eq!(EFFECTS.len(), 10, "ten adjustable effects are required");
-    assert_eq!(
-        TITLE_STYLES.len(),
-        10,
-        "ten animated title styles are required"
+    assert_eq!(TRANSITIONS.len(), TransitionKind::ALL.len());
+    assert_eq!(EFFECTS.len(), EffectKind::ALL.len());
+    assert_eq!(TITLE_STYLES.len(), 10);
+    assert!(
+        TRANSITIONS.len() >= 58,
+        "the full ffmpeg xfade set must be exposed"
     );
+    assert!(EFFECTS.len() >= 30, "the effect catalog must be expanded");
 
-    let transitions: HashSet<&str> = TRANSITIONS
+    for kind in TransitionKind::ALL {
+        assert!(
+            TRANSITIONS.iter().any(|(_, candidate)| candidate == kind),
+            "transition {kind:?} is missing from the catalog"
+        );
+    }
+    let transitions: HashSet<&str> = TransitionKind::ALL
         .iter()
-        .map(|(_, kind)| kind.xfade_name())
+        .map(|kind| kind.xfade_name())
         .collect();
     assert_eq!(
         transitions.len(),
-        10,
+        TransitionKind::ALL.len(),
         "transition xfade names must be unique"
     );
 
+    for kind in EffectKind::ALL {
+        assert!(
+            EFFECTS.iter().any(|definition| definition.kind == *kind),
+            "effect {kind:?} is missing from the catalog"
+        );
+    }
     let effect_kinds: HashSet<String> = EFFECTS
         .iter()
         .map(|definition| format!("{:?}", definition.kind))
         .collect();
-    assert_eq!(effect_kinds.len(), 10, "effect kinds must be unique");
+    assert_eq!(
+        effect_kinds.len(),
+        EffectKind::ALL.len(),
+        "effect kinds must be unique"
+    );
     for definition in EFFECTS {
-        assert!(
-            !definition.params.is_empty(),
-            "{} must expose at least one adjustable parameter",
+        let effect = make_effect(definition.kind).expect("make effect");
+        assert_eq!(
+            effect.params.len(),
+            definition.params.len(),
+            "{} must materialize every parameter",
             definition.name
         );
-        let effect = make_effect(definition.kind).expect("make effect");
-        assert!(!effect.params.is_empty());
+        let mut keys = HashSet::new();
+        for param in definition.params {
+            assert!(
+                keys.insert(param.key),
+                "{} has duplicate parameter {}",
+                definition.name,
+                param.key
+            );
+        }
     }
 
     let styles: HashSet<String> = TITLE_STYLES
@@ -439,51 +465,90 @@ fn full_feature_export_matches_every_preset() {
 fn feature_matrix_renders_all_transitions_effects_and_titles() {
     let f = fixtures();
     let tools = Toolchain::detect().expect("ffmpeg/ffprobe");
-    let mut project = empty_project();
-    let (one, _, _, _) = import_all(&mut project, &f, &tools);
 
-    // Ten clips, each carrying one transition and one effect.
-    for (index, ((_, transition), definition)) in TRANSITIONS.iter().zip(EFFECTS.iter()).enumerate()
-    {
+    // Every transition, one per short clip.
+    let mut transitions_project = empty_project();
+    let (one, _, _, _) = import_all(&mut transitions_project, &f, &tools);
+    for (index, (_, transition)) in TRANSITIONS.iter().enumerate() {
         let mut clip = default_clip_for(&one, 0.0);
-        clip.name = format!("Matrix {}", index + 1);
-        clip.out_point = 0.8;
-        clip.effects.push(make_effect(definition.kind).unwrap());
+        clip.name = format!("Transition {}", index + 1);
+        clip.out_point = 0.45;
         if index > 0 {
             clip.transition = Some(Transition {
                 kind: *transition,
-                duration: 0.15,
+                duration: 0.12,
             });
         }
-        project.primary_video_track_mut().unwrap().clips.push(clip);
+        transitions_project
+            .primary_video_track_mut()
+            .unwrap()
+            .clips
+            .push(clip);
     }
-    edit::reflow_primary_ordered(&mut project);
+    edit::reflow_primary_ordered(&mut transitions_project);
 
-    // Ten title clips, one per animated style, spread across the sequence.
+    // Every animated title style, spread across the transition sequence.
     for (index, (_, style)) in TITLE_STYLES.iter().enumerate() {
         let mut title = Title::opening("Style matrix");
         title.text = format!("STYLE {}", index + 1);
         title.style = *style;
         title.size = 54.0;
-        project.add_title(title, 0.1 + index as f64 * 0.6, 0.55);
+        transitions_project.add_title(title, 0.1 + index as f64 * 0.6, 0.5);
     }
 
-    let output = f.dir.path().join("matrix.mp4");
+    let transition_output = f.dir.path().join("matrix-transitions.mp4");
     let options = RenderOptions {
         width: 480,
         height: 270,
         preview: true,
         allow_offline: false,
         level: "3.1".into(),
-        output: output.clone(),
+        output: transition_output.clone(),
     };
-    let report = render_project(&project, f.dir.path(), &tools, &options).expect("matrix render");
-    assert!(report.duration > 6.0);
-    let probe = tools.probe(&output).expect("probe matrix");
+    let transition_report = render_project(&transitions_project, f.dir.path(), &tools, &options)
+        .expect("transition matrix render");
+    assert!(transition_report.duration > 10.0);
+    let probe = tools
+        .probe(&transition_output)
+        .expect("probe transition matrix");
     assert_eq!(probe.video_codec.as_deref(), Some("h264"));
     assert_eq!(probe.width, Some(480));
     assert_eq!(probe.height, Some(270));
-    assert!(output.is_file());
+
+    // Every effect, one per short clip.
+    let mut effects_project = empty_project();
+    let effect_asset = import_media(&mut effects_project, Some(f.dir.path()), &tools, &f.one)
+        .expect("import effect source");
+    for (index, definition) in EFFECTS.iter().enumerate() {
+        let mut clip = default_clip_for(&effect_asset, 0.0);
+        clip.name = format!("Effect {} {}", index + 1, definition.name);
+        clip.out_point = 0.3;
+        clip.effects.push(make_effect(definition.kind).unwrap());
+        effects_project
+            .primary_video_track_mut()
+            .unwrap()
+            .clips
+            .push(clip);
+    }
+    edit::reflow_primary_ordered(&mut effects_project);
+
+    let effects_output = f.dir.path().join("matrix-effects.mp4");
+    let options = RenderOptions {
+        width: 480,
+        height: 270,
+        preview: true,
+        allow_offline: false,
+        level: "3.1".into(),
+        output: effects_output.clone(),
+    };
+    let effects_report = render_project(&effects_project, f.dir.path(), &tools, &options)
+        .expect("effect matrix render");
+    assert!(effects_report.duration > 8.0);
+    let probe = tools.probe(&effects_output).expect("probe effect matrix");
+    assert_eq!(probe.video_codec.as_deref(), Some("h264"));
+    assert_eq!(probe.width, Some(480));
+    assert_eq!(probe.height, Some(270));
+    assert!(effects_output.is_file());
 }
 
 #[test]

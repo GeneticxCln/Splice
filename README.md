@@ -11,7 +11,9 @@ Splice is fully offline: no network calls, telemetry, uploads or auto-update.
 
 - Storyboard and multi-track timeline: `Video 1`, `Overlay`, `Music`, `Voiceover`.
 - Media library with ffprobe probing, offline detection and validated relinking.
-- 10 transitions, 10 adjustable effects and 10 animated title styles.
+- 58 transitions (the full ffmpeg `xfade` set) and 38 effects covering tone,
+  colour, denoise, blur, distortion, pixelation and colour-ramp looks, plus 10
+  animated title styles.
 - AutoMovie: opening title, scene crossfades, closing credits and an optional
   music bed fitted to the movie length.
 - Voiceover recording from the default input through cpal.

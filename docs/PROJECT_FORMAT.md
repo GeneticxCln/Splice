@@ -112,11 +112,26 @@ A project has four default tracks: `Video 1` (primary), `Overlay`, `Music`, and
 
 - `style` is one of `fade`, `rise`, `slide_left`, `pop`, `blur_in`, `tracking`,
   `lower_third`, `credit_roll`, `spin_in`, `pulse`.
-- `transition.kind` is one of `fade`, `dissolve`, `wipe_left`, `wipe_right`,
-  `wipe_up`, `wipe_down`, `slide_left`, `slide_right`, `circle_open`,
-  `circle_close`.
-- Effect `kind` is one of `brightness`, `contrast`, `saturation`, `hue_rotate`,
-  `monochrome`, `vignette`, `sharpen`, `blur`, `pan_zoom`, `temperature`.
+- `transition.kind` is one of the 58 ffmpeg `xfade` transitions: `fade`,
+  `dissolve`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `slide_left`,
+  `slide_right`, `slide_up`, `slide_down`, `circle_open`, `circle_close`,
+  `circle_crop`, `rect_crop`, `radial`, `distance`, `pixelize`, `fade_black`,
+  `fade_white`, `fade_grays`, `fade_fast`, `fade_slow`, `smooth_left`,
+  `smooth_right`, `smooth_up`, `smooth_down`, `vert_open`, `vert_close`,
+  `horz_open`, `horz_close`, `diag_tl`, `diag_tr`, `diag_bl`, `diag_br`,
+  `wipe_tl`, `wipe_tr`, `wipe_bl`, `wipe_br`, `hl_slice`, `hr_slice`,
+  `vu_slice`, `vd_slice`, `hl_wind`, `hr_wind`, `vu_wind`, `vd_wind`,
+  `cover_left`, `cover_right`, `cover_up`, `cover_down`, `reveal_left`,
+  `reveal_right`, `reveal_up`, `reveal_down`, `squeeze_h`, `squeeze_v`,
+  `zoom_in`, `h_blur`.
+- Effect `kind` is one of the 38 effects: `brightness`, `contrast`,
+  `saturation`, `hue_rotate`, `monochrome`, `vignette`, `sharpen`, `blur`,
+  `pan_zoom`, `temperature`, `gamma`, `color_balance`, `vibrance`,
+  `hue_saturation`, `colorize`, `invert`, `edge_detect`, `film_grain`,
+  `posterize`, `median`, `smart_blur`, `box_blur`, `bilateral`, `deband`,
+  `denoise`, `deblock`, `chroma_shift`, `rgb_split`, `lens_correction`,
+  `rotate`, `flip_horizontal`, `flip_vertical`, `levels`, `film_curve`,
+  `heat_map`, `pixelate`, `color_contrast`, `color_correct`.
 
 ## Save and load guarantees
 

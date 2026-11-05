@@ -2110,31 +2110,37 @@ impl SpliceApp {
                     .selected_text(current)
                     .width(180.0)
                     .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_label(clip.transition.is_none(), "None")
-                            .clicked()
-                        {
-                            clip.transition = None;
-                            changed = true;
-                        }
-                        for (name, kind) in TRANSITIONS {
-                            let selected = clip
-                                .transition
-                                .as_ref()
-                                .map(|transition| transition.kind == *kind)
-                                .unwrap_or(false);
-                            if ui.selectable_label(selected, *name).clicked() {
-                                clip.transition = Some(Transition {
-                                    kind: *kind,
-                                    duration: clip
+                        egui::ScrollArea::vertical()
+                            .max_height(320.0)
+                            .show(ui, |ui| {
+                                if ui
+                                    .selectable_label(clip.transition.is_none(), "None")
+                                    .clicked()
+                                {
+                                    clip.transition = None;
+                                    changed = true;
+                                }
+                                for (name, kind) in TRANSITIONS {
+                                    let selected = clip
                                         .transition
                                         .as_ref()
-                                        .map(|transition| transition.duration)
-                                        .unwrap_or_else(catalog::default_transition_duration),
-                                });
-                                changed = true;
-                            }
-                        }
+                                        .map(|transition| transition.kind == *kind)
+                                        .unwrap_or(false);
+                                    if ui.selectable_label(selected, *name).clicked() {
+                                        clip.transition = Some(Transition {
+                                            kind: *kind,
+                                            duration: clip
+                                                .transition
+                                                .as_ref()
+                                                .map(|transition| transition.duration)
+                                                .unwrap_or_else(
+                                                    catalog::default_transition_duration,
+                                                ),
+                                        });
+                                        changed = true;
+                                    }
+                                }
+                            });
                     });
                 if let Some(transition) = &mut clip.transition {
                     let response = ui.add(
@@ -2189,16 +2195,20 @@ impl SpliceApp {
                 changed = true;
             }
             ui.menu_button("+ Add effect", |ui| {
-                for def in EFFECTS {
-                    let response = ui.button(def.name).on_hover_text(def.description);
-                    if response.clicked() {
-                        if let Some(effect) = catalog::make_effect(def.kind) {
-                            clip.effects.push(effect);
-                            changed = true;
+                egui::ScrollArea::vertical()
+                    .max_height(420.0)
+                    .show(ui, |ui| {
+                        for def in EFFECTS {
+                            let response = ui.button(def.name).on_hover_text(def.description);
+                            if response.clicked() {
+                                if let Some(effect) = catalog::make_effect(def.kind) {
+                                    clip.effects.push(effect);
+                                    changed = true;
+                                }
+                                ui.close_menu();
+                            }
                         }
-                        ui.close_menu();
-                    }
-                }
+                    });
             });
         }
 

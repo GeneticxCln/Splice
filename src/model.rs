@@ -193,6 +193,78 @@ pub enum EffectKind {
     Blur,
     PanZoom,
     Temperature,
+    Gamma,
+    ColorBalance,
+    Vibrance,
+    HueSaturation,
+    Colorize,
+    Invert,
+    EdgeDetect,
+    FilmGrain,
+    Posterize,
+    Median,
+    SmartBlur,
+    BoxBlur,
+    Bilateral,
+    Deband,
+    Denoise,
+    Deblock,
+    ChromaShift,
+    RgbSplit,
+    LensCorrection,
+    Rotate,
+    FlipHorizontal,
+    FlipVertical,
+    Levels,
+    FilmCurve,
+    HeatMap,
+    Pixelate,
+    ColorContrast,
+    ColorCorrect,
+}
+
+impl EffectKind {
+    /// Every effect this build can render, in catalog order.
+    pub const ALL: &'static [EffectKind] = &[
+        EffectKind::Brightness,
+        EffectKind::Contrast,
+        EffectKind::Saturation,
+        EffectKind::HueRotate,
+        EffectKind::Monochrome,
+        EffectKind::Vignette,
+        EffectKind::Sharpen,
+        EffectKind::Blur,
+        EffectKind::PanZoom,
+        EffectKind::Temperature,
+        EffectKind::Gamma,
+        EffectKind::ColorBalance,
+        EffectKind::Vibrance,
+        EffectKind::HueSaturation,
+        EffectKind::Colorize,
+        EffectKind::Invert,
+        EffectKind::EdgeDetect,
+        EffectKind::FilmGrain,
+        EffectKind::Posterize,
+        EffectKind::Median,
+        EffectKind::SmartBlur,
+        EffectKind::BoxBlur,
+        EffectKind::Bilateral,
+        EffectKind::Deband,
+        EffectKind::Denoise,
+        EffectKind::Deblock,
+        EffectKind::ChromaShift,
+        EffectKind::RgbSplit,
+        EffectKind::LensCorrection,
+        EffectKind::Rotate,
+        EffectKind::FlipHorizontal,
+        EffectKind::FlipVertical,
+        EffectKind::Levels,
+        EffectKind::FilmCurve,
+        EffectKind::HeatMap,
+        EffectKind::Pixelate,
+        EffectKind::ColorContrast,
+        EffectKind::ColorCorrect,
+    ];
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -201,36 +273,87 @@ pub struct Transition {
     pub duration: f64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TransitionKind {
-    Fade,
-    Dissolve,
-    WipeLeft,
-    WipeRight,
-    WipeUp,
-    WipeDown,
-    SlideLeft,
-    SlideRight,
-    CircleOpen,
-    CircleClose,
+macro_rules! transition_kinds {
+    ($($variant:ident => $xfade:literal,)*) => {
+        #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+        #[serde(rename_all = "snake_case")]
+        pub enum TransitionKind {
+            $($variant,)*
+        }
+
+        impl TransitionKind {
+            /// Every transition this build can render, in catalog order.
+            pub const ALL: &'static [TransitionKind] = &[$(TransitionKind::$variant,)*];
+
+            pub fn xfade_name(self) -> &'static str {
+                match self {
+                    $(TransitionKind::$variant => $xfade,)*
+                }
+            }
+        }
+    };
 }
 
-impl TransitionKind {
-    pub fn xfade_name(self) -> &'static str {
-        match self {
-            TransitionKind::Fade => "fade",
-            TransitionKind::Dissolve => "dissolve",
-            TransitionKind::WipeLeft => "wipeleft",
-            TransitionKind::WipeRight => "wiperight",
-            TransitionKind::WipeUp => "wipeup",
-            TransitionKind::WipeDown => "wipedown",
-            TransitionKind::SlideLeft => "slideleft",
-            TransitionKind::SlideRight => "slideright",
-            TransitionKind::CircleOpen => "circleopen",
-            TransitionKind::CircleClose => "circleclose",
-        }
-    }
+// The 58 transitions supported by ffmpeg's xfade filter (ffmpeg n9.0.2).
+transition_kinds! {
+    Fade => "fade",
+    Dissolve => "dissolve",
+    WipeLeft => "wipeleft",
+    WipeRight => "wiperight",
+    WipeUp => "wipeup",
+    WipeDown => "wipedown",
+    SlideLeft => "slideleft",
+    SlideRight => "slideright",
+    SlideUp => "slideup",
+    SlideDown => "slidedown",
+    CircleOpen => "circleopen",
+    CircleClose => "circleclose",
+    CircleCrop => "circlecrop",
+    RectCrop => "rectcrop",
+    Radial => "radial",
+    Distance => "distance",
+    Pixelize => "pixelize",
+    FadeBlack => "fadeblack",
+    FadeWhite => "fadewhite",
+    FadeGrays => "fadegrays",
+    FadeFast => "fadefast",
+    FadeSlow => "fadeslow",
+    SmoothLeft => "smoothleft",
+    SmoothRight => "smoothright",
+    SmoothUp => "smoothup",
+    SmoothDown => "smoothdown",
+    VertOpen => "vertopen",
+    VertClose => "vertclose",
+    HorzOpen => "horzopen",
+    HorzClose => "horzclose",
+    DiagTl => "diagtl",
+    DiagTr => "diagtr",
+    DiagBl => "diagbl",
+    DiagBr => "diagbr",
+    WipeTl => "wipetl",
+    WipeTr => "wipetr",
+    WipeBl => "wipebl",
+    WipeBr => "wipebr",
+    HlSlice => "hlslice",
+    HrSlice => "hrslice",
+    VuSlice => "vuslice",
+    VdSlice => "vdslice",
+    HlWind => "hlwind",
+    HrWind => "hrwind",
+    VuWind => "vuwind",
+    VdWind => "vdwind",
+    CoverLeft => "coverleft",
+    CoverRight => "coverright",
+    CoverUp => "coverup",
+    CoverDown => "coverdown",
+    RevealLeft => "revealleft",
+    RevealRight => "revealright",
+    RevealUp => "revealup",
+    RevealDown => "revealdown",
+    SqueezeH => "squeezeh",
+    SqueezeV => "squeezev",
+    ZoomIn => "zoomin",
+    HBlur => "hblur",
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
