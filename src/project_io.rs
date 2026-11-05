@@ -198,6 +198,46 @@ fn validate_project(project: &Project) -> Result<()> {
                 ))
                 .into());
             }
+            if !clip.motion.origin.is_finite() || clip.motion.origin < 0.0 {
+                return Err(ProjectError::Invalid(format!(
+                    "clip {} has an invalid motion origin",
+                    clip.id
+                ))
+                .into());
+            }
+            if clip.motion.keyframes.len() > 512 {
+                return Err(ProjectError::Invalid(format!(
+                    "clip {} has too many motion keyframes",
+                    clip.id
+                ))
+                .into());
+            }
+            for keyframe in &clip.motion.keyframes {
+                if !keyframe.time.is_finite() || keyframe.time < 0.0 {
+                    return Err(ProjectError::Invalid(format!(
+                        "clip {} has an invalid motion keyframe timestamp",
+                        clip.id
+                    ))
+                    .into());
+                }
+                if !keyframe.scale.is_finite()
+                    || !(1.0..=2.0).contains(&keyframe.scale)
+                    || !keyframe.pan_x.is_finite()
+                    || !keyframe.pan_y.is_finite()
+                    || !(-1.0..=1.0).contains(&keyframe.pan_x)
+                    || !(-1.0..=1.0).contains(&keyframe.pan_y)
+                    || !keyframe.rotation.is_finite()
+                    || !(-180.0..=180.0).contains(&keyframe.rotation)
+                    || !keyframe.opacity.is_finite()
+                    || !(0.0..=1.0).contains(&keyframe.opacity)
+                {
+                    return Err(ProjectError::Invalid(format!(
+                        "clip {} has an invalid motion keyframe value",
+                        clip.id
+                    ))
+                    .into());
+                }
+            }
         }
     }
     Ok(())

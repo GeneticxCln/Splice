@@ -58,6 +58,12 @@ pub struct StoryboardDragState {
     pub insert_x: f32,
 }
 
+#[derive(Debug, Clone)]
+pub struct KeyframeDragState {
+    pub clip_id: String,
+    pub index: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct TimelineUiState {
     pub view: TimelineView,
@@ -66,6 +72,7 @@ pub struct TimelineUiState {
     pub drag: Option<ClipDragState>,
     pub trim: Option<TrimDragState>,
     pub storyboard: Option<StoryboardDragState>,
+    pub keyframe: Option<KeyframeDragState>,
 }
 
 impl TimelineUiState {
@@ -77,6 +84,7 @@ impl TimelineUiState {
             drag: None,
             trim: None,
             storyboard: None,
+            keyframe: None,
         }
     }
 }
@@ -109,6 +117,16 @@ pub enum TimelineAction {
         out_point: f64,
     },
     FinishTrim(String),
+    MoveKeyframe {
+        clip_id: String,
+        index: usize,
+        time: f64,
+    },
+    FinishKeyframe(String),
+    DeleteKeyframe {
+        clip_id: String,
+        index: usize,
+    },
     ReorderPrimary {
         clip_id: String,
         target_index: usize,
@@ -592,6 +610,90 @@ fn show_tracks(
                         paint_transition_marker(ui, rect, clip, zoom);
                         paint_audio_fades(ui, rect, clip);
 
+                        let mut keyframe_hovered = false;
+                        if !clip.motion.keyframes.is_empty() {
+                            let motion_duration = clip.duration().max(0.01);
+                            let origin = clip.motion.origin;
+                            for (index, keyframe) in clip.motion.keyframes.iter().enumerate() {
+                                let local_time = keyframe.time - origin;
+                                if local_time < -0.001 || local_time > motion_duration + 0.001 {
+                                    continue;
+                                }
+                                let fraction =
+                                    (local_time / motion_duration).clamp(0.0, 1.0) as f32;
+                                let center = Pos2::new(
+                                    rect.left() + fraction * rect.width(),
+                                    rect.bottom() - 5.0,
+                                );
+                                ui.painter().add(egui::Shape::convex_polygon(
+                                    vec![
+                                        Pos2::new(center.x, center.y - 4.0),
+                                        Pos2::new(center.x + 4.0, center.y),
+                                        Pos2::new(center.x, center.y + 4.0),
+                                        Pos2::new(center.x - 4.0, center.y),
+                                    ],
+                                    theme::ACCENT,
+                                    Stroke::new(1.0_f32, Color32::BLACK),
+                                ));
+                                let marker_resp = ui.interact(
+                                    Rect::from_center_size(center, Vec2::splat(11.0)),
+                                    ui.id().with(("timeline-keyframe", clip.id.as_str(), index)),
+                                    Sense::click_and_drag(),
+                                );
+                                if marker_resp.hovered() {
+                                    keyframe_hovered = true;
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+                                if marker_resp.clicked() {
+                                    actions.push(TimelineAction::SelectClip(clip.id.clone()));
+                                    actions.push(TimelineAction::Seek(clip.start + local_time));
+                                }
+                                if marker_resp.drag_started() {
+                                    actions.push(TimelineAction::SelectClip(clip.id.clone()));
+                                    state.keyframe = Some(KeyframeDragState {
+                                        clip_id: clip.id.clone(),
+                                        index,
+                                    });
+                                }
+                                if marker_resp.dragged() {
+                                    if let Some(drag) = &state.keyframe {
+                                        if drag.clip_id == clip.id
+                                            && drag.index == index
+                                            && let Some(pointer) = ui.ctx().pointer_interact_pos()
+                                        {
+                                            let fraction = ((pointer.x - rect.left())
+                                                / rect.width())
+                                            .clamp(0.0, 1.0);
+                                            let time = (fraction as f64 * motion_duration * 100.0)
+                                                .round()
+                                                / 100.0;
+                                            actions.push(TimelineAction::MoveKeyframe {
+                                                clip_id: clip.id.clone(),
+                                                index,
+                                                time,
+                                            });
+                                        }
+                                    }
+                                }
+                                if marker_resp.drag_stopped()
+                                    && state
+                                        .keyframe
+                                        .as_ref()
+                                        .map(|drag| drag.clip_id == clip.id && drag.index == index)
+                                        .unwrap_or(false)
+                                {
+                                    state.keyframe = None;
+                                    actions.push(TimelineAction::FinishKeyframe(clip.id.clone()));
+                                }
+                                if marker_resp.secondary_clicked() {
+                                    actions.push(TimelineAction::DeleteKeyframe {
+                                        clip_id: clip.id.clone(),
+                                        index,
+                                    });
+                                }
+                            }
+                        }
+
                         let clip_resp = ui.interact(
                             rect,
                             ui.id().with(("timeline-clip", clip.id.as_str())),
@@ -603,7 +705,8 @@ fn show_tracks(
                         if clip_resp.double_clicked() {
                             actions.push(TimelineAction::Seek(clip.start));
                         }
-                        if clip_resp.drag_started() {
+                        if clip_resp.drag_started() && !keyframe_hovered && state.keyframe.is_none()
+                        {
                             if let Some(pointer) = ui.ctx().pointer_interact_pos() {
                                 let time = ((pointer.x - canvas.left()) / zoom) as f64;
                                 state.drag = Some(ClipDragState {
@@ -612,7 +715,7 @@ fn show_tracks(
                                 });
                             }
                         }
-                        if clip_resp.dragged() {
+                        if clip_resp.dragged() && !keyframe_hovered && state.keyframe.is_none() {
                             if let Some(drag) = &state.drag {
                                 if drag.clip_id == clip.id {
                                     if let Some(pointer) = ui.ctx().pointer_interact_pos() {

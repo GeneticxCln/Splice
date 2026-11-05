@@ -8,6 +8,7 @@ pub mod ffmpeg;
 pub mod history;
 pub mod library;
 pub mod model;
+pub mod motion;
 pub mod presets;
 pub mod preview;
 pub mod project_io;

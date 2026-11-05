@@ -146,6 +146,16 @@ pub fn render_project(
             &mut used_labels,
         )?;
         let duration = online_duration.unwrap_or(clip.duration());
+        let label = apply_rgba_motion(
+            label,
+            clip,
+            duration,
+            width,
+            height,
+            Some(&project.settings.background),
+            &mut filters,
+            &mut used_labels,
+        );
         visuals.push(Visual {
             label,
             start: clip.start,
@@ -219,6 +229,16 @@ pub fn render_project(
                 &mut next_label,
                 &mut used_labels,
             )?;
+            let overlay_label = apply_rgba_motion(
+                overlay_label,
+                clip,
+                clip.duration(),
+                width,
+                height,
+                None,
+                &mut filters,
+                &mut used_labels,
+            );
             let padded = used_labels.next("ov");
             let start_ms = (clip.start * 1000.0).round().max(0.0) as u64;
             if start_ms > 0 {
@@ -422,6 +442,59 @@ pub fn render_project(
         duration: timeline,
         command: display,
     })
+}
+
+/// Applies rotation and opacity in a real RGBA pass. Primary clips are
+/// composited over the project background; overlays keep their alpha for the
+/// later multi-track composite.
+#[allow(clippy::too_many_arguments)]
+fn apply_rgba_motion(
+    label: String,
+    clip: &Clip,
+    duration: f64,
+    width: u32,
+    height: u32,
+    background: Option<&str>,
+    filters: &mut Vec<String>,
+    labels: &mut LabelAllocator,
+) -> String {
+    let duration = duration.max(0.01);
+    let rotation = clip.motion.rotation_expression(duration);
+    let opacity = clip.motion.opacity_expression(duration);
+    if rotation.is_none() && opacity.is_none() {
+        return label;
+    }
+
+    let mut chain = format!("[{label}]format=rgba");
+    if let Some(rotation) = rotation {
+        let _ = write!(
+            chain,
+            ",rotate=angle='{rotation}':fillcolor=black@0:ow=iw:oh=ih"
+        );
+    }
+    if let Some(opacity) = opacity {
+        let _ = write!(
+            chain,
+            ",geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({opacity})'"
+        );
+    }
+
+    let motion_label = labels.next("motion");
+    filters.push(format!("{chain}[{motion_label}]"));
+    if let Some(background) = background {
+        let background_label = labels.next("motionbg");
+        filters.push(format!(
+            "color=c={}:s={width}x{height}:r=30:d={duration:.4},format=yuva420p[{background_label}]",
+            ffmpeg_color(background)
+        ));
+        let output = labels.next("motioncomp");
+        filters.push(format!(
+            "[{background_label}][{motion_label}]overlay=x=0:y=0:shortest=1:format=auto,format=yuv420p[{output}]"
+        ));
+        output
+    } else {
+        motion_label
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -723,6 +796,13 @@ fn prepare_visual(
                 );
             }
         }
+    }
+
+    if let Some((zoom, pan_x, pan_y)) = clip.motion.zoompan_expressions(requested) {
+        let _ = write!(
+            chain,
+            ",zoompan=z='{zoom}':x='{pan_x}':y='{pan_y}':d=1:s={width}x{height}:fps=30"
+        );
     }
 
     let _ = write!(

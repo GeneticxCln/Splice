@@ -13,7 +13,8 @@ Projects are versioned JSON documents with the `.splice` extension.
 ## Features
 
 - Storyboard and four-track timeline: Video 1, Overlay, Music, Voiceover.
-- 58 transitions, 38 effects, and 10 title styles.
+- 58 transitions, 38 effects, and 10 title styles with optional custom motion.
+- Clip-local scale, pan, rotation, and opacity keyframes with timeline markers.
 - Searchable effect and transition menus.
 - AutoMovie titles, crossfades, credits, and optional music.
 - Proxy preview with audio monitoring; output recovers after device errors.

@@ -6,7 +6,9 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 
-use crate::model::{Clip, Project, Title, TitleStyle};
+use crate::model::{
+    Clip, MotionDirection, MotionEasing, Project, Title, TitleMotion, TitleMotionPreset, TitleStyle,
+};
 
 const SHORTS_SAFE_SIDE: f32 = 0.15;
 const SHORTS_SAFE_TOP: f32 = 0.10;
@@ -149,6 +151,10 @@ fn event_line(
     width: u32,
     height: u32,
 ) -> String {
+    if let Some(motion) = &title.motion {
+        return motion_event_line(index, clip, title, layout, motion, width, height);
+    }
+
     let duration = clip.duration().max(0.05);
     let start = fmt_time(clip.start.max(0.0));
     let end = fmt_time(clip.start.max(0.0) + duration);
@@ -247,6 +253,163 @@ fn event_line(
     format!("Dialogue: 0,{start},{end},Title{index},,0,0,0,,{{{tags}}}{text}")
 }
 
+fn motion_event_line(
+    index: usize,
+    clip: &Clip,
+    title: &Title,
+    layout: &TitleLayout,
+    motion: &TitleMotion,
+    width: u32,
+    height: u32,
+) -> String {
+    let duration = clip.duration().max(0.05);
+    let start = fmt_time(clip.start.max(0.0));
+    let end = fmt_time(clip.start.max(0.0) + duration);
+    let (x, y) = title_position(title, layout, width, height);
+    let in_ms = (motion.in_duration.clamp(0.0, duration) * 1000.0).round() as i64;
+    let out_ms = (motion.out_duration.clamp(0.0, duration) * 1000.0).round() as i64;
+    let size = layout.event_font_size;
+    let distance_x = width as f32 * motion.distance.clamp(0.0, 0.5) as f32;
+    let distance_y = height as f32 * motion.distance.clamp(0.0, 0.5) as f32;
+    let mut tags = format!("\\an5\\pos({x:.0},{y:.0})");
+    let mut text = layout.text.clone();
+
+    match motion.preset {
+        TitleMotionPreset::Fade => {
+            let _ = write!(tags, "\\fad({in_ms},{out_ms})");
+        }
+        TitleMotionPreset::Rise => {
+            let _ = write!(
+                tags,
+                "\\move({x:.0},{:.0},{x:.0},{y:.0},0,{in_ms})\\fad({in_ms},{out_ms})",
+                y + distance_y
+            );
+        }
+        TitleMotionPreset::Slide => {
+            let (start_x, start_y) = match motion.direction {
+                MotionDirection::Left => (x + distance_x, y),
+                MotionDirection::Right => (x - distance_x, y),
+                MotionDirection::Up => (x, y + distance_y),
+                MotionDirection::Down => (x, y - distance_y),
+            };
+            let _ = write!(
+                tags,
+                "\\move({start_x:.0},{start_y:.0},{x:.0},{y:.0},0,{in_ms})\\fad({in_ms},{out_ms})"
+            );
+        }
+        TitleMotionPreset::Pop => {
+            let settle = (in_ms * 55 / 100).max(1);
+            let _ = write!(
+                tags,
+                "\\fad(120,{out_ms})\\fscx38\\fscy38{}\\t({settle},{in_ms},\\fscx100\\fscy100)",
+                transform_tag(0, settle, motion.easing, "\\fscx106\\fscy106")
+            );
+        }
+        TitleMotionPreset::Blur => {
+            let _ = write!(
+                tags,
+                "\\blur18{}\\fad({in_ms},{out_ms})",
+                transform_tag(0, in_ms, motion.easing, "\\blur0")
+            );
+        }
+        TitleMotionPreset::Tracking => {
+            let _ = write!(
+                tags,
+                "\\fsp{:.0}\\fad({in_ms},{out_ms}){}",
+                size * 0.35,
+                transform_tag(0, in_ms, motion.easing, &format!("\\fsp{:.0}", size * 0.02))
+            );
+        }
+        TitleMotionPreset::Typewriter => {
+            let _ = write!(tags, "\\fad(0,{out_ms})");
+            text = typewriter_text(&layout.text, in_ms);
+        }
+    }
+
+    format!("Dialogue: 0,{start},{end},Title{index},,0,0,0,,{{{tags}}}{text}")
+}
+
+fn transform_tag(start: i64, end: i64, easing: MotionEasing, modifiers: &str) -> String {
+    let accel = match easing {
+        MotionEasing::Linear => 1.0,
+        MotionEasing::EaseIn => 2.0,
+        MotionEasing::EaseOut => 0.5,
+        MotionEasing::EaseInOut => 1.0,
+    };
+    format!("\\t({start},{end},{accel:.1},{modifiers})")
+}
+
+/// Wraps visible characters in an alpha reveal while leaving ASS control
+/// sequences (line breaks and style overrides) intact.
+fn typewriter_text(text: &str, duration_ms: i64) -> String {
+    let visible = visible_character_count(text).max(1) as i64;
+    let step = (duration_ms / visible).max(8);
+    let mut result = String::new();
+    let mut visible_index = 0i64;
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\\' {
+            result.push(character);
+            if let Some(next) = chars.next() {
+                result.push(next);
+            }
+            continue;
+        }
+        if character == '{' {
+            result.push(character);
+            for next in chars.by_ref() {
+                result.push(next);
+                if next == '}' {
+                    break;
+                }
+            }
+            continue;
+        }
+        if character == '}' {
+            result.push(character);
+            continue;
+        }
+        let start = visible_index * step;
+        let end = (start + step).min(duration_ms.max(step));
+        if character.is_whitespace() {
+            result.push(character);
+            visible_index += 1;
+            continue;
+        }
+        let _ = write!(
+            result,
+            "{{\\alpha&HFF&\\t({start},{end},\\alpha&H00&)}}{character}"
+        );
+        visible_index += 1;
+    }
+    result
+}
+
+fn visible_character_count(text: &str) -> usize {
+    let mut count = 0usize;
+    let mut in_override = false;
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '{' {
+            in_override = true;
+            continue;
+        }
+        if character == '}' {
+            in_override = false;
+            continue;
+        }
+        if in_override {
+            continue;
+        }
+        if character == '\\' {
+            chars.next();
+            continue;
+        }
+        count += 1;
+    }
+    count
+}
+
 fn layout_title(title: &Title, width: u32, height: u32) -> TitleLayout {
     let scale = font_scale(width, height);
     let base_size = (title.size.max(8.0) * scale).round().max(8.0);
@@ -263,7 +426,7 @@ fn layout_title(title: &Title, width: u32, height: u32) -> TitleLayout {
     }
 
     let safe = SafeArea::shorts(width, height);
-    let motion = motion_scale(title.style);
+    let motion = motion_scale(title);
     let mut font_size = base_size;
     let mut wrapped = wrap_title(title, safe.width(), font_size);
     // Long Shorts titles shrink only as much as needed to keep the complete
@@ -306,7 +469,12 @@ fn title_text(title: &Title, subtitle_size: f32, reset_spacing: bool) -> String 
 }
 
 fn wrap_title(title: &Title, max_width: f32, font_size: f32) -> WrappedText {
-    let spacing = if title.style == TitleStyle::Tracking {
+    let custom_tracking = title
+        .motion
+        .as_ref()
+        .map(|motion| motion.preset == TitleMotionPreset::Tracking)
+        .unwrap_or(false);
+    let spacing = if title.style == TitleStyle::Tracking || custom_tracking {
         font_size * 0.35
     } else {
         0.0
@@ -453,8 +621,14 @@ fn glyph_em(character: char) -> f32 {
     }
 }
 
-fn motion_scale(style: TitleStyle) -> f32 {
-    match style {
+fn motion_scale(title: &Title) -> f32 {
+    if let Some(motion) = &title.motion {
+        return match motion.preset {
+            TitleMotionPreset::Pop => 1.06,
+            _ => 1.0,
+        };
+    }
+    match title.style {
         TitleStyle::Pop => 1.06,
         TitleStyle::Pulse => 1.04,
         TitleStyle::SpinIn => 1.12,
@@ -679,6 +853,48 @@ mod tests {
     #[test]
     fn text_cannot_inject_override_tags() {
         assert_eq!(sanitize_text("hi {\\b1}"), "hi (/b1)");
+    }
+
+    #[test]
+    fn custom_typewriter_motion_emits_alpha_reveal() {
+        let mut project = Project::new("Motion");
+        let mut title = Title::opening("Hello");
+        title.motion = Some(TitleMotion {
+            preset: TitleMotionPreset::Typewriter,
+            in_duration: 0.8,
+            ..TitleMotion::default()
+        });
+        project.add_title(title, 0.0, 2.0);
+        let clip = project.title_clips()[0];
+        let title = clip.title.as_ref().expect("title");
+        let layout = layout_title(title, 1920, 1080);
+        let event = event_line(0, clip, title, &layout, 1920, 1080);
+
+        assert!(event.contains("\\alpha&HFF&"));
+        assert!(event.contains("\\t("));
+        assert!(event.contains("}H"));
+        assert!(event.contains("}o"));
+    }
+
+    #[test]
+    fn legacy_titles_keep_their_style_animation() {
+        let mut project = Project::new("Legacy");
+        project.add_title(Title::opening("Hello"), 0.0, 2.0);
+        let clip = project.title_clips()[0];
+        let title = clip.title.as_ref().expect("title");
+        let layout = layout_title(title, 1920, 1080);
+        let event = event_line(0, clip, title, &layout, 1920, 1080);
+
+        assert!(event.contains("\\fad("));
+        assert!(!event.contains("\\alpha&HFF&"));
+    }
+
+    #[test]
+    fn typewriter_keeps_line_breaks_and_subtitle_tags() {
+        let text = typewriter_text("A\\N{\\fs20}BC", 200);
+        assert!(text.contains("\\N"));
+        assert!(text.contains("{\\fs20}"));
+        assert_eq!(text.matches("\\alpha&HFF&").count(), 3);
     }
 
     #[test]

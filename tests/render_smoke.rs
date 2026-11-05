@@ -6,8 +6,8 @@ use splice::export::export_project;
 use splice::ffmpeg::Toolchain;
 use splice::library::import_media;
 use splice::model::{
-    AudioParams, EffectKind, Framing, MediaKind, Project, Title, Transition, TransitionKind,
-    default_clip_for,
+    AudioParams, ClipMotion, EffectKind, Framing, MediaKind, MotionEasing, MotionKeyframe, Project,
+    Title, TitleMotion, TitleMotionPreset, Transition, TransitionKind, default_clip_for,
 };
 use splice::presets::ExportPreset;
 use tempfile::TempDir;
@@ -186,6 +186,105 @@ fn simple_feature_export() {
     if let Some(keep) = keep {
         let _ = std::fs::copy(&output, keep);
     }
+}
+
+#[test]
+fn custom_title_motion_renders_through_ass() {
+    let dir = TempDir::new().unwrap();
+    let tools = Toolchain::detect().unwrap();
+    let still_path = dir.path().join("title-still.png");
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=0x205070:s=640x360:d=1",
+        "-frames:v",
+        "1",
+        still_path.to_str().unwrap(),
+    ]);
+
+    let mut project = Project::new("Title motion");
+    let still = import_media(&mut project, Some(dir.path()), &tools, &still_path).unwrap();
+    let mut clip = default_clip_for(&still, 0.0);
+    clip.out_point = 2.0;
+    project.primary_video_track_mut().unwrap().clips.push(clip);
+    project.reflow_primary();
+
+    let mut title = Title::opening("Typewriter");
+    title.text = "MOTION".into();
+    title.size = 72.0;
+    title.motion = Some(TitleMotion {
+        preset: TitleMotionPreset::Typewriter,
+        in_duration: 1.0,
+        out_duration: 0.3,
+        ..TitleMotion::default()
+    });
+    project.add_title(title, 0.1, 2.4);
+
+    let output = dir.path().join("title-motion.mp4");
+    let report =
+        export_project(&project, dir.path(), &tools, ExportPreset::P480p, &output).unwrap();
+    assert!(report.duration > 2.4);
+    assert!(output.is_file());
+    let probe = tools.probe(&output).unwrap();
+    assert_eq!(probe.video_codec.as_deref(), Some("h264"));
+    assert_eq!(probe.width, Some(854));
+    assert_eq!(probe.height, Some(480));
+}
+
+#[test]
+fn keyframed_scale_pan_rotation_and_opacity_render_through_ffmpeg() {
+    let dir = TempDir::new().unwrap();
+    let tools = Toolchain::detect().unwrap();
+    let still_path = dir.path().join("motion-still.png");
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=0x205070:s=640x360:d=1",
+        "-frames:v",
+        "1",
+        still_path.to_str().unwrap(),
+    ]);
+
+    let mut project = Project::new("Clip motion");
+    let still = import_media(&mut project, Some(dir.path()), &tools, &still_path).unwrap();
+    let mut clip = default_clip_for(&still, 0.0);
+    clip.out_point = 2.0;
+    clip.motion = ClipMotion {
+        keyframes: vec![
+            MotionKeyframe {
+                time: 0.0,
+                scale: 1.0,
+                pan_x: -0.25,
+                pan_y: 0.0,
+                rotation: -8.0,
+                opacity: 1.0,
+            },
+            MotionKeyframe {
+                time: 2.0,
+                scale: 1.35,
+                pan_x: 0.25,
+                pan_y: -0.1,
+                rotation: 8.0,
+                opacity: 0.55,
+            },
+        ],
+        easing: MotionEasing::EaseInOut,
+        origin: 0.0,
+    };
+    project.primary_video_track_mut().unwrap().clips.push(clip);
+    project.reflow_primary();
+
+    let output = dir.path().join("clip-motion.mp4");
+    let report =
+        export_project(&project, dir.path(), &tools, ExportPreset::P480p, &output).unwrap();
+    assert!(report.duration > 1.9);
+    assert!(output.is_file());
+    let probe = tools.probe(&output).unwrap();
+    assert_eq!(probe.video_codec.as_deref(), Some("h264"));
+    assert_eq!(probe.width, Some(854));
+    assert_eq!(probe.height, Some(480));
 }
 
 #[test]

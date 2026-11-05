@@ -10,15 +10,16 @@ use eframe::egui::{
 
 use crate::audio::{Recorder, RecordingStats};
 use crate::automovie::{self, AutoMovieOptions};
-use crate::catalog::{self, EFFECTS, FONTS, PALETTE, TITLE_STYLES, TRANSITIONS};
+use crate::catalog::{self, EFFECTS, FONTS, PALETTE, TITLE_MOTIONS, TITLE_STYLES, TRANSITIONS};
 use crate::edit;
 use crate::export::{ExportReport, export_project};
 use crate::ffmpeg::Toolchain;
 use crate::history::History;
 use crate::library;
 use crate::model::{
-    AudioParams, Framing, MediaAsset, MediaKind, Project, Settings, Title, TrackKind, Transition,
-    new_id, resolve_media_path,
+    AudioParams, ClipMotion, Framing, MediaAsset, MediaKind, MotionDirection, MotionEasing,
+    Project, Settings, Title, TitleMotion, TitleMotionPreset, TrackKind, Transition, new_id,
+    resolve_media_path,
 };
 use crate::presets::ExportPreset;
 use crate::preview::{Preview, preview_dimensions};
@@ -782,12 +783,58 @@ impl SpliceApp {
                     self.drag_checkpoint = Some(clip_id.clone());
                 }
                 if let Some((_, clip)) = self.project.clip_by_id_mut(&clip_id) {
+                    let old_in = clip.in_point;
+                    let old_duration = clip.duration();
                     clip.start = start.max(0.0);
                     clip.in_point = in_point.max(0.0);
                     clip.out_point = out_point.max(clip.in_point + 0.05);
+                    let new_duration = clip.duration();
+                    let delta = clip.in_point - old_in;
+                    if delta.abs() > 0.0001 {
+                        clip.motion = clip.motion.trim_start(delta, new_duration);
+                    } else if (new_duration - old_duration).abs() > 0.0001 {
+                        clip.motion = clip.motion.trim_end(new_duration);
+                    }
                 }
                 self.dirty = true;
                 self.invalidate_preview();
+            }
+            TimelineAction::MoveKeyframe {
+                clip_id,
+                index,
+                time,
+            } => {
+                if self.drag_checkpoint.as_deref() != Some(clip_id.as_str()) {
+                    self.push_undo();
+                    self.drag_checkpoint = Some(clip_id.clone());
+                }
+                if let Some((_, clip)) = self.project.clip_by_id_mut(&clip_id) {
+                    let clip_duration = clip.duration();
+                    let origin = clip.motion.origin;
+                    if let Some(keyframe) = clip.motion.keyframes.get_mut(index) {
+                        keyframe.time = origin + time.clamp(0.0, clip_duration);
+                    }
+                }
+                self.dirty = true;
+                self.invalidate_preview();
+            }
+            TimelineAction::FinishKeyframe(clip_id) => {
+                self.drag_checkpoint = None;
+                self.history.break_coalescing();
+                if let Some((_, clip)) = self.project.clip_by_id_mut(&clip_id) {
+                    clip.motion.sort_and_dedupe();
+                }
+                self.mark_edited();
+            }
+            TimelineAction::DeleteKeyframe { clip_id, index } => {
+                self.push_undo();
+                if let Some((_, clip)) = self.project.clip_by_id_mut(&clip_id) {
+                    if index < clip.motion.keyframes.len() {
+                        clip.motion.keyframes.remove(index);
+                    }
+                }
+                self.mark_edited();
+                self.set_status("Motion keyframe deleted", false);
             }
             TimelineAction::FinishTrim(clip_id) => {
                 self.drag_checkpoint = None;
@@ -2080,6 +2127,7 @@ impl SpliceApp {
         });
         ui.add_space(4.0);
 
+        let local_playhead = self.playhead();
         let clip = self
             .project
             .clip_by_id_mut(&selection)
@@ -2332,6 +2380,12 @@ impl SpliceApp {
                     theme::muted(ui, "No effects match that search.");
                 }
             });
+        }
+
+        if track_kind != TrackKind::Audio && clip.title.is_none() {
+            ui.add_space(6.0);
+            ui.separator();
+            motion_editor(ui, &mut clip.motion, duration, local_playhead, &mut changed);
         }
 
         ui.add_space(6.0);
@@ -3746,6 +3800,289 @@ fn title_editor(ui: &mut Ui, title: &mut Title, changed: &mut bool) {
     });
     let response = ui.checkbox(&mut title.bold, "Bold");
     *changed |= response.changed();
+
+    ui.add_space(6.0);
+    ui.separator();
+    theme::section_label(ui, "Motion");
+    let mut custom_motion = title.motion.is_some();
+    if ui
+        .checkbox(&mut custom_motion, "Custom motion")
+        .on_hover_text("Override the selected title style's built-in animation")
+        .changed()
+    {
+        title.motion = custom_motion.then(TitleMotion::default);
+        *changed = true;
+    }
+    if let Some(motion) = &mut title.motion {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Preset").size(10.0).color(theme::MUTED));
+            egui::ComboBox::from_id_salt(ui.id().with("title-motion"))
+                .selected_text(catalog::title_motion_name(motion.preset))
+                .width(180.0)
+                .show_ui(ui, |ui| {
+                    for (name, preset) in TITLE_MOTIONS {
+                        if ui
+                            .selectable_label(motion.preset == *preset, *name)
+                            .clicked()
+                        {
+                            motion.preset = *preset;
+                            *changed = true;
+                        }
+                    }
+                });
+        });
+        ui.label(
+            RichText::new(catalog::title_motion_description(motion.preset))
+                .size(9.5)
+                .color(theme::MUTED),
+        );
+
+        let response = ui.add(
+            egui::Slider::new(&mut motion.in_duration, 0.0..=3.0)
+                .text("In")
+                .suffix(" s"),
+        );
+        *changed |= response.changed();
+        let response = ui.add(
+            egui::Slider::new(&mut motion.out_duration, 0.0..=3.0)
+                .text("Out")
+                .suffix(" s"),
+        );
+        *changed |= response.changed();
+
+        if motion.preset == TitleMotionPreset::Slide {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Direction").size(10.0).color(theme::MUTED));
+                egui::ComboBox::from_id_salt(ui.id().with("title-motion-direction"))
+                    .selected_text(motion_direction_name(motion.direction))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for (name, direction) in [
+                            ("Left", MotionDirection::Left),
+                            ("Right", MotionDirection::Right),
+                            ("Up", MotionDirection::Up),
+                            ("Down", MotionDirection::Down),
+                        ] {
+                            if ui
+                                .selectable_label(motion.direction == direction, name)
+                                .clicked()
+                            {
+                                motion.direction = direction;
+                                *changed = true;
+                            }
+                        }
+                    });
+            });
+        }
+
+        if motion.preset != TitleMotionPreset::Typewriter {
+            let response = ui.add(
+                egui::Slider::new(&mut motion.distance, 0.0..=0.5)
+                    .text("Distance")
+                    .step_by(0.01),
+            );
+            *changed |= response.changed();
+        }
+
+        if matches!(
+            motion.preset,
+            TitleMotionPreset::Pop | TitleMotionPreset::Blur | TitleMotionPreset::Tracking
+        ) {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Easing").size(10.0).color(theme::MUTED));
+                egui::ComboBox::from_id_salt(ui.id().with("title-motion-easing"))
+                    .selected_text(motion_easing_name(motion.easing))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for (name, easing) in [
+                            ("Linear", MotionEasing::Linear),
+                            ("Ease in", MotionEasing::EaseIn),
+                            ("Ease out", MotionEasing::EaseOut),
+                        ] {
+                            if ui.selectable_label(motion.easing == easing, name).clicked() {
+                                motion.easing = easing;
+                                *changed = true;
+                            }
+                        }
+                    });
+            });
+        }
+
+        if motion.preset == TitleMotionPreset::Typewriter {
+            theme::muted(ui, "Characters reveal across the In duration.");
+        }
+    }
+}
+
+fn motion_direction_name(direction: MotionDirection) -> &'static str {
+    match direction {
+        MotionDirection::Left => "Left",
+        MotionDirection::Right => "Right",
+        MotionDirection::Up => "Up",
+        MotionDirection::Down => "Down",
+    }
+}
+
+fn motion_easing_name(easing: MotionEasing) -> &'static str {
+    match easing {
+        MotionEasing::Linear => "Linear",
+        MotionEasing::EaseIn => "Ease in",
+        MotionEasing::EaseOut => "Ease out",
+        MotionEasing::EaseInOut => "Ease in/out",
+    }
+}
+
+fn motion_editor(
+    ui: &mut Ui,
+    motion: &mut ClipMotion,
+    duration: f64,
+    local_playhead: f64,
+    changed: &mut bool,
+) {
+    theme::section_label(ui, "Motion");
+    if motion.keyframes.is_empty() {
+        theme::muted(
+            ui,
+            "No keyframes. Add one at the playhead to animate scale, pan, rotation, or opacity.",
+        );
+    }
+
+    let mut remove = None;
+    let mut edited = false;
+    let origin = motion.origin;
+    for (index, keyframe) in motion.keyframes.iter_mut().enumerate() {
+        let mut local_time = (keyframe.time - origin).clamp(0.0, duration);
+        egui::Frame::new()
+            .fill(theme::PANEL_RAISED)
+            .stroke(Stroke::new(1.0_f32, theme::BORDER))
+            .corner_radius(egui::CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(7))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("Keyframe {}", index + 1))
+                            .size(11.0)
+                            .strong(),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.small_button("×").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                });
+                if ui
+                    .add(
+                        egui::Slider::new(&mut local_time, 0.0..=duration)
+                            .text("Time")
+                            .suffix(" s"),
+                    )
+                    .changed()
+                {
+                    keyframe.time = origin + local_time;
+                    edited = true;
+                }
+                if ui
+                    .add(
+                        egui::Slider::new(&mut keyframe.scale, 1.0..=2.0)
+                            .text("Scale")
+                            .step_by(0.01),
+                    )
+                    .changed()
+                {
+                    edited = true;
+                }
+                if ui
+                    .add(
+                        egui::Slider::new(&mut keyframe.pan_x, -1.0..=1.0)
+                            .text("Pan X")
+                            .step_by(0.01),
+                    )
+                    .changed()
+                {
+                    edited = true;
+                }
+                if ui
+                    .add(
+                        egui::Slider::new(&mut keyframe.pan_y, -1.0..=1.0)
+                            .text("Pan Y")
+                            .step_by(0.01),
+                    )
+                    .changed()
+                {
+                    edited = true;
+                }
+                if ui
+                    .add(
+                        egui::Slider::new(&mut keyframe.rotation, -180.0..=180.0)
+                            .text("Rotation")
+                            .suffix("°")
+                            .step_by(1.0),
+                    )
+                    .changed()
+                {
+                    edited = true;
+                }
+                if ui
+                    .add(
+                        egui::Slider::new(&mut keyframe.opacity, 0.0..=1.0)
+                            .text("Opacity")
+                            .step_by(0.01),
+                    )
+                    .changed()
+                {
+                    edited = true;
+                }
+            });
+        ui.add_space(4.0);
+    }
+    if let Some(index) = remove {
+        motion.keyframes.remove(index);
+        *changed = true;
+    }
+    if motion.keyframes.is_empty() {
+        motion.origin = 0.0;
+    }
+
+    ui.horizontal(|ui| {
+        if ui.button("+ Add keyframe at playhead").clicked() {
+            let value = motion.sample(local_playhead.clamp(0.0, duration));
+            motion.set_keyframe(local_playhead.clamp(0.0, duration), value);
+            *changed = true;
+        }
+        if !motion.keyframes.is_empty() && ui.button("Clear").clicked() {
+            motion.keyframes.clear();
+            motion.origin = 0.0;
+            *changed = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Easing").size(10.0).color(theme::MUTED));
+        egui::ComboBox::from_id_salt("clip-motion-easing")
+            .selected_text(motion_easing_name(motion.easing))
+            .show_ui(ui, |ui| {
+                for easing in [
+                    MotionEasing::Linear,
+                    MotionEasing::EaseIn,
+                    MotionEasing::EaseOut,
+                    MotionEasing::EaseInOut,
+                ] {
+                    if ui
+                        .selectable_value(&mut motion.easing, easing, motion_easing_name(easing))
+                        .changed()
+                    {
+                        *changed = true;
+                    }
+                }
+            });
+    });
+    if edited {
+        *changed = true;
+        motion.sort_and_dedupe();
+    }
+    theme::muted(
+        ui,
+        "Keyframes use clip-local time. Scale 1.0 keeps the original framing; opacity 1.0 is fully visible.",
+    );
 }
 
 fn color_row(ui: &mut Ui, label: &str, value: &mut String, changed: &mut bool) {

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::model::{EffectInstance, EffectKind, TitleStyle, TransitionKind, new_id};
+use crate::model::{
+    EffectInstance, EffectKind, TitleMotionPreset, TitleStyle, TransitionKind, new_id,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParamDef {
@@ -465,6 +467,16 @@ pub const TITLE_STYLES: &[(&str, TitleStyle)] = &[
     ("Pulse", TitleStyle::Pulse),
 ];
 
+pub const TITLE_MOTIONS: &[(&str, TitleMotionPreset)] = &[
+    ("Fade", TitleMotionPreset::Fade),
+    ("Rise", TitleMotionPreset::Rise),
+    ("Slide", TitleMotionPreset::Slide),
+    ("Pop", TitleMotionPreset::Pop),
+    ("Blur", TitleMotionPreset::Blur),
+    ("Tracking", TitleMotionPreset::Tracking),
+    ("Typewriter", TitleMotionPreset::Typewriter),
+];
+
 pub const FONTS: &[&str] = &[
     "DejaVu Sans",
     "DejaVu Serif",
@@ -534,5 +546,25 @@ pub fn title_style_description(style: TitleStyle) -> &'static str {
         TitleStyle::CreditRoll => "Classic end-credit vertical roll.",
         TitleStyle::SpinIn => "Small rotation that settles upright.",
         TitleStyle::Pulse => "A gentle repeating scale pulse.",
+    }
+}
+
+pub fn title_motion_name(preset: TitleMotionPreset) -> &'static str {
+    TITLE_MOTIONS
+        .iter()
+        .find(|(_, candidate)| *candidate == preset)
+        .map(|(name, _)| *name)
+        .unwrap_or("Motion")
+}
+
+pub fn title_motion_description(preset: TitleMotionPreset) -> &'static str {
+    match preset {
+        TitleMotionPreset::Fade => "A clean opacity fade in and out.",
+        TitleMotionPreset::Rise => "Text rises into place from below.",
+        TitleMotionPreset::Slide => "Text slides in from the chosen direction.",
+        TitleMotionPreset::Pop => "A short scale pop with a settle.",
+        TitleMotionPreset::Blur => "Defocus that resolves into sharp type.",
+        TitleMotionPreset::Tracking => "Letter spacing tightens as it fades in.",
+        TitleMotionPreset::Typewriter => "Characters appear one by one, left to right.",
     }
 }

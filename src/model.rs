@@ -176,6 +176,50 @@ pub struct Clip {
     pub audio: AudioParams,
     #[serde(default)]
     pub title: Option<Title>,
+    /// Optional clip-local scale/pan keyframes.
+    #[serde(default, skip_serializing_if = "ClipMotion::is_empty")]
+    pub motion: ClipMotion,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ClipMotion {
+    #[serde(default)]
+    pub keyframes: Vec<MotionKeyframe>,
+    #[serde(default)]
+    pub easing: MotionEasing,
+    /// Offset from clip-local time into the keyframe curve. Splitting and
+    /// trimming advance this instead of rewriting keyframe times, which keeps
+    /// eased curves sample-identical across edits.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub origin: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MotionKeyframe {
+    /// Seconds in the clip's motion curve.
+    pub time: f64,
+    /// 1.0 is the original framing; values above 1 zoom in.
+    pub scale: f64,
+    /// Normalized horizontal pan, -1..1.
+    #[serde(default)]
+    pub pan_x: f64,
+    /// Normalized vertical pan, -1..1.
+    #[serde(default)]
+    pub pan_y: f64,
+    /// Clockwise rotation in degrees.
+    #[serde(default)]
+    pub rotation: f64,
+    /// Layer opacity, 0..1.
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
+}
+
+fn default_opacity() -> f64 {
+    1.0
+}
+
+fn is_zero(value: &f64) -> bool {
+    value.abs() < 1e-9
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -405,6 +449,80 @@ pub struct Title {
     pub style: TitleStyle,
     #[serde(default)]
     pub bold: bool,
+    /// Optional motion override. `None` keeps the legacy behaviour selected by
+    /// `style`, so older projects render exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<TitleMotion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TitleMotion {
+    #[serde(default)]
+    pub preset: TitleMotionPreset,
+    #[serde(default = "default_title_motion_duration")]
+    pub in_duration: f64,
+    #[serde(default = "default_title_motion_duration")]
+    pub out_duration: f64,
+    #[serde(default)]
+    pub direction: MotionDirection,
+    #[serde(default)]
+    pub easing: MotionEasing,
+    #[serde(default = "default_title_motion_distance")]
+    pub distance: f64,
+}
+
+fn default_title_motion_duration() -> f64 {
+    0.45
+}
+
+fn default_title_motion_distance() -> f64 {
+    0.12
+}
+
+impl Default for TitleMotion {
+    fn default() -> Self {
+        Self {
+            preset: TitleMotionPreset::Fade,
+            in_duration: default_title_motion_duration(),
+            out_duration: default_title_motion_duration(),
+            direction: MotionDirection::Left,
+            easing: MotionEasing::EaseOut,
+            distance: default_title_motion_distance(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleMotionPreset {
+    #[default]
+    Fade,
+    Rise,
+    Slide,
+    Pop,
+    Blur,
+    Tracking,
+    Typewriter,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionDirection {
+    #[default]
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionEasing {
+    #[default]
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -600,6 +718,7 @@ impl Project {
             transition: None,
             audio: AudioParams::default(),
             title: Some(title),
+            motion: ClipMotion::default(),
         };
         let track = self.overlay_track_mut().expect("overlay track");
         track.clips.push(clip);
@@ -679,6 +798,7 @@ impl Title {
             position_y: 0.44,
             style: TitleStyle::Fade,
             bold: true,
+            motion: None,
         }
     }
 
@@ -695,6 +815,7 @@ impl Title {
             position_y: 0.5,
             style: TitleStyle::CreditRoll,
             bold: false,
+            motion: None,
         }
     }
 }
@@ -734,5 +855,6 @@ pub fn default_clip_for(asset: &MediaAsset, start: f64) -> Clip {
         transition: None,
         audio: AudioParams::default(),
         title: None,
+        motion: ClipMotion::default(),
     }
 }

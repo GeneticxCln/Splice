@@ -112,14 +112,17 @@ pub fn split_clip(project: &mut Project, clip_id: &str, at: f64) -> Result<Optio
         bail!("playhead is not inside the clip; move it away from the edges");
     }
 
+    let (left_motion, right_motion) = original.motion.split(offset);
     let mut left = original.clone();
     left.out_point = left.in_point + offset;
+    left.motion = left_motion;
     let mut right = original;
     right.id = new_id("clip");
     right.name = format!("{} (split)", right.name);
     right.start = at;
     right.in_point += offset;
     right.transition = None;
+    right.motion = right_motion;
     for effect in &mut right.effects {
         effect.id = new_id("fx");
     }

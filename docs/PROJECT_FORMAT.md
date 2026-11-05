@@ -80,7 +80,28 @@ A project has four default tracks: `Video 1` (primary), `Overlay`, `Music`, and
   ],
   "transition": { "kind": "dissolve", "duration": 0.5 },
   "audio": { "volume": 0.7, "fade_in": 0.3, "fade_out": 0.0, "muted": false },
-  "title": null
+  "title": null,
+  "motion": {
+    "keyframes": [
+      {
+        "time": 0.0,
+        "scale": 1.0,
+        "pan_x": 0.0,
+        "pan_y": 0.0,
+        "rotation": 0.0,
+        "opacity": 1.0
+      },
+      {
+        "time": 3.0,
+        "scale": 1.3,
+        "pan_x": 0.2,
+        "pan_y": -0.1,
+        "rotation": 6.0,
+        "opacity": 0.65
+      }
+    ],
+    "easing": "ease_in_out"
+  }
 }
 ```
 
@@ -93,6 +114,17 @@ A project has four default tracks: `Video 1` (primary), `Overlay`, `Music`, and
   parameters are preserved rather than silently dropped.
 - `transition` belongs to the incoming clip. The timeline reflow places the clip
   so it overlaps the previous one by the transition duration.
+- `motion` is optional and empty/absent for a static clip. Its keyframes use
+  clip-local seconds, so trimming or moving a clip keeps the same animation.
+  `scale` is limited to `1.0..2.0`; `pan_x` and `pan_y` are normalized
+  `-1.0..1.0` offsets. `rotation` is clockwise degrees in `-180..180`, and
+  `opacity` is `0..1`. `easing` is `linear`, `ease_in`, `ease_out`, or
+  `ease_in_out`. Splitting and trimming preserve the sampled curve exactly by
+  advancing an optional `origin` offset rather than rewriting keyframes. The
+  origin is omitted when zero. A project may store at most 512 keyframes per
+  clip. Rotation and opacity are composited as RGBA before the clip is returned
+  to the normal YUV timeline; primary clips fade/rotate over the project
+  background, while overlay clips keep their alpha for the multi-track overlay.
 - Title clips have `"media_id": null` and a `title` object:
 
 ```json
@@ -107,12 +139,33 @@ A project has four default tracks: `Video 1` (primary), `Overlay`, `Music`, and
   "position_x": 0.5,
   "position_y": 0.44,
   "style": "fade",
-  "bold": true
+  "bold": true,
+  "motion": null
 }
 ```
 
 - `style` is one of `fade`, `rise`, `slide_left`, `pop`, `blur_in`, `tracking`,
   `lower_third`, `credit_roll`, `spin_in`, `pulse`.
+- `motion` is optional. When absent or `null`, the title uses the animation built
+  into `style`. A custom motion object overrides that animation while keeping
+  the style's layout rules:
+
+```json
+{
+  "preset": "typewriter",
+  "in_duration": 0.8,
+  "out_duration": 0.45,
+  "direction": "left",
+  "easing": "ease_out",
+  "distance": 0.12
+}
+```
+
+  `preset` is one of `fade`, `rise`, `slide`, `pop`, `blur`, `tracking`, or
+  `typewriter`. `direction` is one of `left`, `right`, `up`, or `down` and is
+  used by `slide`. `easing` is `linear`, `ease_in`, `ease_out`, or `ease_in_out`
+  and applies where libass can animate the transform. Typewriter reveals
+  characters with per-character alpha tags; it is not karaoke colouring.
 - `transition.kind` is one of the 58 ffmpeg `xfade` transitions: `fade`,
   `dissolve`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `slide_left`,
   `slide_right`, `slide_up`, `slide_down`, `circle_open`, `circle_close`,
@@ -143,9 +196,9 @@ A project has four default tracks: `Video 1` (primary), `Overlay`, `Music`, and
   project moved together with its media keeps relative references.
 - Loading validates the extension, UTF-8, JSON, envelope, version, settings, and
   project invariants (unique media ids, non-empty source paths, finite
-  non-negative clip times, positive durations, and clips that are either media
-  or title clips). Unknown enum values such as effects, transitions, or title
-  styles are rejected by serde.
+  non-negative clip times, positive durations, clips that are either media or
+  title clips, and valid motion keyframes). Unknown enum values such as effects,
+  transitions, or title styles are rejected by serde.
 - A second save/load cycle is bit-stable; the acceptance suite asserts exact
   equality after the first round-trip normalizes one floating-point ULP.
 
