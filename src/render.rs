@@ -481,6 +481,8 @@ fn apply_rgba_motion(
 
     let motion_label = labels.next("motion");
     filters.push(format!("{chain}[{motion_label}]"));
+    // Composite only after rotation and alpha reduction. Putting the opaque
+    // background in the motion chain would fade the background with the clip.
     if let Some(background) = background {
         let background_label = labels.next("motionbg");
         filters.push(format!(
@@ -1010,4 +1012,81 @@ fn command_display(command: &Command) -> String {
         }
     }
     parts.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AudioParams, ClipMotion, MotionEasing, MotionKeyframe};
+
+    fn motion_clip() -> Clip {
+        Clip {
+            id: "clip-motion".into(),
+            name: "motion".into(),
+            media_id: None,
+            start: 0.0,
+            in_point: 0.0,
+            out_point: 2.0,
+            effects: Vec::new(),
+            transition: None,
+            audio: AudioParams::default(),
+            title: None,
+            motion: ClipMotion {
+                keyframes: vec![
+                    MotionKeyframe {
+                        time: 0.0,
+                        scale: 1.0,
+                        pan_x: 0.0,
+                        pan_y: 0.0,
+                        rotation: 0.0,
+                        opacity: 1.0,
+                    },
+                    MotionKeyframe {
+                        time: 2.0,
+                        scale: 1.0,
+                        pan_x: 0.0,
+                        pan_y: 0.0,
+                        rotation: 30.0,
+                        opacity: 0.25,
+                    },
+                ],
+                easing: MotionEasing::Linear,
+                origin: 0.0,
+            },
+        }
+    }
+
+    #[test]
+    fn background_is_composited_after_rotation_and_opacity() {
+        let clip = motion_clip();
+        let mut filters = Vec::new();
+        let mut labels = LabelAllocator::default();
+        let output = apply_rgba_motion(
+            "frame".into(),
+            &clip,
+            2.0,
+            640,
+            360,
+            Some("#112233"),
+            &mut filters,
+            &mut labels,
+        );
+
+        assert_eq!(output, "motioncomp0");
+        assert_eq!(filters.len(), 3);
+
+        let motion = &filters[0];
+        let rotate_at = motion.find("rotate=").expect("rotation filter");
+        let alpha_at = motion.find("geq=").expect("opacity filter");
+        assert!(rotate_at < alpha_at);
+        assert!(motion.contains("a='alpha(X,Y)*("));
+        assert!(!motion.contains("overlay="));
+
+        assert!(filters[1].contains("color=c=0x112233"));
+        assert!(
+            filters[2].starts_with("[motionbg0][motion0]overlay="),
+            "background must composite the post-motion frame: {}",
+            filters[2]
+        );
+    }
 }
