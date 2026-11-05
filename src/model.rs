@@ -25,6 +25,16 @@ pub struct Project {
     pub tracks: Vec<Track>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Framing {
+    /// Preserve the whole source and pad the canvas with the project background.
+    #[default]
+    Fit,
+    /// Fill the canvas and center-crop the source.
+    Fill,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
     pub width: u32,
@@ -33,6 +43,8 @@ pub struct Settings {
     pub sample_rate: u32,
     #[serde(default = "default_background")]
     pub background: String,
+    #[serde(default)]
+    pub framing: Framing,
 }
 
 fn default_background() -> String {
@@ -47,7 +59,28 @@ impl Default for Settings {
             fps: FPS,
             sample_rate: SAMPLE_RATE,
             background: default_background(),
+            framing: Framing::Fit,
         }
+    }
+}
+
+impl Settings {
+    /// A 9:16 canvas shared by YouTube Shorts and TikTok.
+    pub fn shorts() -> Self {
+        Self {
+            width: 1080,
+            height: 1920,
+            framing: Framing::Fill,
+            ..Self::default()
+        }
+    }
+
+    pub fn is_short(&self) -> bool {
+        self.height > self.width
+    }
+
+    pub fn aspect_ratio(&self) -> f32 {
+        self.width as f32 / self.height.max(1) as f32
     }
 }
 
@@ -400,6 +433,12 @@ pub fn new_id(prefix: &str) -> String {
 }
 
 impl Project {
+    pub fn new_shorts(name: impl Into<String>) -> Self {
+        let mut project = Self::new(name);
+        project.settings = Settings::shorts();
+        project
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             format: PROJECT_FORMAT.to_string(),
@@ -619,6 +658,14 @@ impl Clip {
 }
 
 impl Title {
+    pub fn opening_for(project_name: &str, settings: &Settings) -> Self {
+        let mut title = Self::opening(project_name);
+        if settings.is_short() {
+            title.position_y = 0.38;
+        }
+        title
+    }
+
     pub fn opening(project_name: &str) -> Self {
         Self {
             text: project_name.to_string(),

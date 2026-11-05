@@ -156,7 +156,7 @@ pub fn build(project: &mut Project, options: &AutoMovieOptions) -> Result<AutoMo
     }
 
     if options.opening_title {
-        let mut title = Title::opening(&project.name);
+        let mut title = Title::opening_for(&project.name, &project.settings);
         title.text = opening_name.clone();
         let duration = options.opening_duration.clamp(0.5, 15.0);
         project.add_title(title, 0.0, duration);

@@ -19,8 +19,8 @@ use splice::export::export_project;
 use splice::ffmpeg::Toolchain;
 use splice::library::{import_media, relink_media};
 use splice::model::{
-    AudioParams, EffectKind, MediaAsset, MediaKind, Project, Title, TitleStyle, Transition,
-    TransitionKind, default_clip_for,
+    AudioParams, EffectKind, Framing, MediaAsset, MediaKind, Project, Title, TitleStyle,
+    Transition, TransitionKind, default_clip_for,
 };
 use splice::presets::ExportPreset;
 use splice::project_io::{load_project, save_project};
@@ -363,12 +363,36 @@ fn catalog_and_presets_are_complete() {
         (ExportPreset::P1080p, 1920, 1080, "4.1"),
         (ExportPreset::P720p, 1280, 720, "3.2"),
         (ExportPreset::P480p, 854, 480, "3.1"),
+        (ExportPreset::PShorts1080p, 1080, 1920, "4.1"),
+        (ExportPreset::PShorts720p, 720, 1280, "3.2"),
     ];
     for (preset, width, height, level) in presets {
         assert_eq!(preset.width(), width);
         assert_eq!(preset.height(), height);
         assert_eq!(preset.level(), level);
     }
+}
+
+#[test]
+fn projects_without_framing_default_to_fit() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("old.splice");
+    let document = serde_json::json!({
+        "format": "splice-project",
+        "version": 1,
+        "name": "Old project",
+        "settings": {
+            "width": 1920,
+            "height": 1080,
+            "fps": 30,
+            "sample_rate": 48000
+        },
+        "media": [],
+        "tracks": []
+    });
+    std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+    let loaded = load_project(&path).expect("old project should load");
+    assert_eq!(loaded.project.settings.framing, Framing::Fit);
 }
 
 #[test]

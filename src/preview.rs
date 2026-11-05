@@ -17,11 +17,31 @@ use crate::render::{RenderOptions, render_project};
 pub const PREVIEW_WIDTH: u32 = 960;
 pub const PREVIEW_HEIGHT: u32 = 540;
 
+/// Proxy dimensions that preserve the project canvas aspect ratio. The long
+/// side stays near 960 px, so 16:9 is 960x540 and 9:16 is 540x960.
+pub fn preview_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let width = width.max(1);
+    let height = height.max(1);
+    if width >= height {
+        let output_height = (PREVIEW_WIDTH as f64 * height as f64 / width as f64).round() as u32;
+        (PREVIEW_WIDTH, even_dimension(output_height))
+    } else {
+        let output_width = (PREVIEW_WIDTH as f64 * width as f64 / height as f64).round() as u32;
+        (even_dimension(output_width), PREVIEW_WIDTH)
+    }
+}
+
+fn even_dimension(value: u32) -> u32 {
+    (value.max(16) / 2) * 2
+}
+
 enum RenderMessage {
     Ready {
         generation: u64,
         path: PathBuf,
         duration: f64,
+        width: u32,
+        height: u32,
     },
     Failed {
         generation: u64,
@@ -361,10 +381,11 @@ impl Preview {
         self.ffmpeg_path = tools.ffmpeg.clone();
         self.stop_playback();
 
+        let (width, height) = preview_dimensions(project.settings.width, project.settings.height);
         std::thread::spawn(move || {
             let options = RenderOptions {
-                width: PREVIEW_WIDTH,
-                height: PREVIEW_HEIGHT,
+                width,
+                height,
                 preview: true,
                 allow_offline: true,
                 level: "3.1".to_string(),
@@ -375,6 +396,8 @@ impl Preview {
                     generation,
                     path: report.output,
                     duration: report.duration,
+                    width,
+                    height,
                 },
                 Err(error) => RenderMessage::Failed {
                     generation,
@@ -394,6 +417,8 @@ impl Preview {
                 generation,
                 path,
                 duration,
+                width,
+                height,
             }) => {
                 self.render_rx = None;
                 self.rendering = false;
@@ -407,6 +432,7 @@ impl Preview {
                     }
                 }
                 self.proxy_duration = duration;
+                self.frame_size = (width, height);
                 self.texture = None;
                 self.loaded_frame = None;
                 self.desired_frame = Some(self.playhead.min(duration.max(0.01) - 0.01));
@@ -589,6 +615,13 @@ fn ffmpeg_available(tools: Option<&Toolchain>) -> Result<()> {
 mod tests {
     use super::*;
     use cpal::traits::HostTrait;
+
+    #[test]
+    fn proxy_dimensions_preserve_canvas_aspect() {
+        assert_eq!(preview_dimensions(1920, 1080), (960, 540));
+        assert_eq!(preview_dimensions(1080, 1920), (540, 960));
+        assert_eq!(preview_dimensions(854, 480), (960, 540));
+    }
 
     /// Hardware gate for the Play button path: the preview must open the real
     /// default output and consume decoded proxy audio.

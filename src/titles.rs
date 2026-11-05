@@ -36,7 +36,7 @@ pub fn write_ass(project: &Project, width: u32, height: u32, path: &Path) -> Res
         let Some(title) = &clip.title else {
             continue;
         };
-        let style = style_line(index, title, height);
+        let style = style_line(index, title, width, height);
         writeln!(ass, "{style}")?;
     }
 
@@ -64,8 +64,8 @@ pub fn write_ass(project: &Project, width: u32, height: u32, path: &Path) -> Res
     Ok(true)
 }
 
-fn style_line(index: usize, title: &Title, output_height: u32) -> String {
-    let scale = output_height as f32 / 1080.0;
+fn style_line(index: usize, title: &Title, output_width: u32, output_height: u32) -> String {
+    let scale = font_scale(output_width, output_height);
     let font_size = (title.size.max(8.0) * scale).round().max(8.0);
     let font = if title.font.trim().is_empty() {
         "DejaVu Sans"
@@ -91,7 +91,7 @@ fn event_line(index: usize, clip: &Clip, title: &Title, width: u32, height: u32)
     let duration = clip.duration().max(0.05);
     let start = fmt_time(clip.start.max(0.0));
     let end = fmt_time(clip.start.max(0.0) + duration);
-    let scale = height as f32 / 1080.0;
+    let scale = font_scale(width, height);
     let size = (title.size.max(8.0) * scale).max(8.0);
     let x = (title.position_x.clamp(0.0, 1.0) * width as f32).round();
     let y = (title.position_y.clamp(0.0, 1.0) * height as f32).round();
@@ -150,11 +150,16 @@ fn event_line(index: usize, clip: &Clip, title: &Title, width: u32, height: u32)
         }
         TitleStyle::LowerThird => {
             let start_x = (width as f32 * 0.04).max(40.0);
+            let lower_y = if height > width {
+                height as f32 * 0.72
+            } else {
+                height as f32 * 0.84
+            };
             let _ = write!(
                 tags,
                 "\\an4\\move({start_x:.0},{:.0},{start_x:.0},{:.0},0,480)\\fad({intro},{outro})",
-                (height as f32 * 0.84).round() + 85.0,
-                (height as f32 * 0.84).round()
+                lower_y.round() + 85.0,
+                lower_y.round()
             );
         }
         TitleStyle::CreditRoll => {
@@ -246,6 +251,10 @@ fn sanitize_text(text: &str) -> String {
         .replace('}', ")")
 }
 
+fn font_scale(width: u32, height: u32) -> f32 {
+    width.min(height) as f32 / 1080.0
+}
+
 fn alpha_for(opacity: f32) -> u8 {
     ((1.0 - opacity.clamp(0.0, 1.0)) * 255.0).round() as u8
 }
@@ -284,6 +293,13 @@ pub fn escape_filter_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn font_scale_uses_the_short_side() {
+        assert!((font_scale(1920, 1080) - 1.0).abs() < 1e-6);
+        assert!((font_scale(1080, 1920) - 1.0).abs() < 1e-6);
+        assert!((font_scale(1280, 720) - (2.0 / 3.0)).abs() < 1e-6);
+    }
 
     #[test]
     fn time_format_is_centisecond_accurate() {

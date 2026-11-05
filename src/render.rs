@@ -7,8 +7,8 @@ use anyhow::{Context, Result, bail};
 
 use crate::ffmpeg::Toolchain;
 use crate::model::{
-    Clip, EffectKind, FPS, MediaAsset, MediaKind, Project, Track, TrackKind, TransitionKind,
-    resolve_media_path,
+    Clip, EffectKind, FPS, Framing, MediaAsset, MediaKind, Project, Track, TrackKind,
+    TransitionKind, resolve_media_path,
 };
 use crate::titles::{escape_filter_path, write_ass};
 
@@ -138,8 +138,8 @@ pub fn render_project(
             project_dir,
             clip,
             input_for_clip.get(&clip.id).copied(),
-            &options.width,
-            &options.height,
+            &width,
+            &height,
             options.allow_offline,
             &mut filters,
             &mut next_label,
@@ -465,11 +465,17 @@ fn prepare_visual(
     let input = input_index.expect("input checked");
     let mut chain = String::new();
     let requested = clip.duration().max(0.01);
+    let framing = frame_filter(
+        *width,
+        *height,
+        project.settings.framing,
+        &project.settings.background,
+    );
 
     if asset.kind == MediaKind::Image {
         let _ = write!(
             chain,
-            "[{input}:v]trim=duration={requested:.4},setpts=PTS-STARTPTS,scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x101318,setsar=1,fps=30"
+            "[{input}:v]trim=duration={requested:.4},setpts=PTS-STARTPTS,{framing},setsar=1,fps=30"
         );
     } else {
         let source_limit = if asset.duration > 0.0 {
@@ -483,7 +489,7 @@ fn prepare_visual(
         let extra = (requested - available).max(0.0);
         let _ = write!(
             chain,
-            "[{input}:v]trim=start={start:.4}:end={end:.4},setpts=PTS-STARTPTS,scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x101318,setsar=1,fps=30"
+            "[{input}:v]trim=start={start:.4}:end={end:.4},setpts=PTS-STARTPTS,{framing},setsar=1,fps=30"
         );
         if extra > 0.01 {
             let _ = write!(chain, ",tpad=stop_mode=clone:stop_duration={extra:.4}");
@@ -725,6 +731,27 @@ fn prepare_visual(
     );
     filters.push(chain);
     Ok((label, Some(requested)))
+}
+
+fn frame_filter(width: u32, height: u32, framing: Framing, background: &str) -> String {
+    match framing {
+        Framing::Fit => format!(
+            "scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={}",
+            ffmpeg_color(background)
+        ),
+        Framing::Fill => format!(
+            "scale={width}:{height}:force_original_aspect_ratio=increase:force_divisible_by=2,crop={width}:{height}"
+        ),
+    }
+}
+
+fn ffmpeg_color(hex: &str) -> String {
+    let clean = hex.trim().trim_start_matches('#');
+    if clean.len() == 6 && clean.chars().all(|character| character.is_ascii_hexdigit()) {
+        format!("0x{clean}")
+    } else {
+        "0x101318".to_string()
+    }
 }
 
 fn push_offline_placeholder(

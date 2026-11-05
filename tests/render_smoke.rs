@@ -6,7 +6,7 @@ use splice::export::export_project;
 use splice::ffmpeg::Toolchain;
 use splice::library::import_media;
 use splice::model::{
-    AudioParams, EffectKind, MediaKind, Project, Title, Transition, TransitionKind,
+    AudioParams, EffectKind, Framing, MediaKind, Project, Title, Transition, TransitionKind,
     default_clip_for,
 };
 use splice::presets::ExportPreset;
@@ -186,6 +186,40 @@ fn simple_feature_export() {
     if let Some(keep) = keep {
         let _ = std::fs::copy(&output, keep);
     }
+}
+
+#[test]
+fn shorts_export_is_vertical_and_fills() {
+    let dir = TempDir::new().unwrap();
+    make_fixtures(dir.path());
+    let tools = Toolchain::detect().unwrap();
+    let mut project = Project::new_shorts("Short");
+    assert!(project.settings.is_short());
+    assert_eq!(project.settings.framing, Framing::Fill);
+
+    let one_path = dir.path().join("one.mp4");
+    let one = import_media(&mut project, Some(dir.path()), &tools, &one_path).unwrap();
+    let mut clip = default_clip_for(&one, 0.0);
+    clip.out_point = 1.0;
+    project.primary_video_track_mut().unwrap().clips.push(clip);
+    project.reflow_primary();
+
+    let output = dir.path().join("short.mp4");
+    let report = export_project(
+        &project,
+        dir.path(),
+        &tools,
+        ExportPreset::PShorts720p,
+        &output,
+    )
+    .unwrap();
+    assert!(report.duration > 0.9);
+    let probe = tools.probe(&output).unwrap();
+    assert_eq!(probe.width, Some(720));
+    assert_eq!(probe.height, Some(1280));
+    assert_eq!(probe.video_codec.as_deref(), Some("h264"));
+    assert_eq!(probe.audio_codec.as_deref(), Some("aac"));
+    assert!(probe.has_audio);
 }
 
 #[test]

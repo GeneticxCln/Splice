@@ -11,6 +11,8 @@ so a project exports identically from either path.
 | `1080p` | 1920 × 1080 | 4.1 |
 | `720p` | 1280 × 720 | 3.2 |
 | `480p` | 854 × 480 | 3.1 |
+| `shorts-1080p` | 1080 × 1920 | 4.1 |
+| `shorts-720p` | 720 × 1280 | 3.2 |
 
 ## Common encoding settings
 
@@ -27,7 +29,7 @@ so a project exports identically from either path.
 | Audio bitrate | 192 kbit/s |
 | Sample rate | 48 000 Hz |
 | Channels | stereo (2) |
-| Scaling | aspect-preserving, padded to the preset canvas with `#101318` |
+| Scaling | project framing: `fit` preserves the source and pads with the project background; `fill` covers the canvas and center-crops |
 
 The preview proxy uses the same graph with `ultrafast`, CRF 28, level 3.1, AAC
 128 kbit/s at 960 × 540. It is never written to the final output path.
@@ -35,7 +37,7 @@ The preview proxy uses the same graph with `ultrafast`, CRF 28, level 3.1, AAC
 ## CLI
 
 ```sh
-splice export --project <file.splice> --preset <1080p|720p|480p> --output <file.mp4>
+splice export --project <file.splice> --preset <1080p|720p|480p|shorts-1080p|shorts-720p> --output <file.mp4>
 ```
 
 Exit status is `0` only after the complete file has been encoded, checked for a
@@ -47,9 +49,22 @@ removes the temporary partial file. Export is refused, with no output file, when
 - the output path does not end in `.mp4`;
 - the output path resolves to one of the project's source media files.
 
+## Framing
+
+`settings.framing` is project-level and applies to every visual clip:
+
+- `fit` — keep the whole source and pad to the canvas. This is the default for
+  existing landscape projects and preserves their output exactly.
+- `fill` — scale to cover the canvas and center-crop. New 9:16 Short projects
+  default to this so horizontal sources fill the frame instead of being
+  pillarboxed.
+
+Shorts presets use 9:16 dimensions accepted by both YouTube Shorts and TikTok.
+The same exported file can be uploaded to either platform.
+
 ## GUI
 
-`Export Movie` opens the same presets and calls the same `export_project`
-function on a background thread, reporting `Exported …` or the exact error in
-the dialog and status bar. The Export button is enabled only while ffmpeg is
-detected.
+`Export Movie` groups landscape and Shorts presets and calls the same
+`export_project` function used by the CLI on a background thread, reporting
+`Exported …` or the exact error in the dialog and status bar. The Export button
+is enabled only while ffmpeg is detected.

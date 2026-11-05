@@ -17,7 +17,9 @@ Projects are versioned JSON documents with the `.splice` extension.
 - Proxy preview with audio monitoring; output recovers after device errors.
 - Voiceover recording, media relinking, and offline-media validation.
 - Atomic saves and a versioned project format.
+- Landscape and 9:16 Shorts presets for YouTube Shorts and TikTok.
 - 1080p, 720p, and 480p H.264/AAC presets shared by the GUI and CLI.
+- Shorts mode with fill/fit framing and safe-area guides.
 
 ## Requirements
 
@@ -43,6 +45,7 @@ Keyboard: `Space` play/pause, `Ctrl+S` save, `Ctrl+O` open, `Ctrl+E` export,
 
 ```sh
 splice export --project docs/demo.splice --preset 1080p --output movie.mp4
+splice export --project docs/demo.splice --preset shorts-1080p --output short.mp4
 splice probe docs/media/clip-a.mp4
 splice voicecheck --seconds 4 --output voice.wav
 ```

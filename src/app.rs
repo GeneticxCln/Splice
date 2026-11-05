@@ -17,11 +17,11 @@ use crate::ffmpeg::Toolchain;
 use crate::history::History;
 use crate::library;
 use crate::model::{
-    AudioParams, MediaAsset, MediaKind, Project, Title, TrackKind, Transition, new_id,
-    resolve_media_path,
+    AudioParams, Framing, MediaAsset, MediaKind, Project, Settings, Title, TrackKind, Transition,
+    new_id, resolve_media_path,
 };
 use crate::presets::ExportPreset;
-use crate::preview::Preview;
+use crate::preview::{Preview, preview_dimensions};
 use crate::project_io::{load_project, save_project};
 use crate::theme;
 use crate::timeline_ui::{self, TimelineAction, TimelineCommand, TimelineUiState, TimelineView};
@@ -66,6 +66,7 @@ pub struct SpliceApp {
 
     preview: Option<Preview>,
     preview_error: Option<String>,
+    shorts_safe_area: bool,
     timeline: TimelineUiState,
     selected_clip: Option<String>,
     selected_media: Option<String>,
@@ -135,6 +136,7 @@ impl SpliceApp {
             .map(Path::to_path_buf)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
+        let export_preset = ExportPreset::matching(&project.settings);
 
         let mut app = Self {
             project,
@@ -144,6 +146,7 @@ impl SpliceApp {
             tool_error,
             preview: None,
             preview_error: None,
+            shorts_safe_area: true,
             timeline: TimelineUiState::new(),
             selected_clip: None,
             selected_media: None,
@@ -160,7 +163,7 @@ impl SpliceApp {
             relink_path: String::new(),
             effect_filter: String::new(),
             transition_filter: String::new(),
-            export_preset: ExportPreset::P1080p,
+            export_preset,
             export_path: String::new(),
             export_rx: None,
             export_started: None,
@@ -211,7 +214,7 @@ impl SpliceApp {
                     .next()
                     .map(|clip| clip.id.clone())
             });
-        app.title_draft = Title::opening(&app.project.name);
+        app.title_draft = Title::opening_for(&app.project.name, &app.project.settings);
 
         match Preview::new() {
             Ok(mut preview) => {
@@ -403,7 +406,7 @@ impl SpliceApp {
                 }
             }
             Dialog::Title => {
-                self.title_draft = Title::opening(&self.project.name);
+                self.title_draft = Title::opening_for(&self.project.name, &self.project.settings);
                 self.title_draft.text = "A New Story".to_string();
                 self.title_duration = 4.0;
             }
@@ -495,6 +498,8 @@ impl SpliceApp {
         match load_project(path) {
             Ok(loaded) => {
                 self.project = loaded.project;
+                self.export_preset = ExportPreset::matching(&self.project.settings);
+                self.title_draft = Title::opening_for(&self.project.name, &self.project.settings);
                 self.project_path = Some(loaded.path.clone());
                 self.project_dir = loaded
                     .path
@@ -535,7 +540,15 @@ impl SpliceApp {
     }
 
     fn new_project(&mut self) {
-        self.project = Project::new("Untitled");
+        self.reset_project(Project::new("Untitled"), "New project");
+    }
+
+    fn new_short_project(&mut self) {
+        self.reset_project(Project::new_shorts("Untitled Short"), "New Short project");
+    }
+
+    fn reset_project(&mut self, project: Project, status: &str) {
+        self.project = project;
         self.project_path = None;
         self.project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         self.selected_clip = None;
@@ -543,12 +556,13 @@ impl SpliceApp {
         self.history.clear();
         self.dirty = false;
         self.drag_checkpoint = None;
+        self.export_preset = ExportPreset::matching(&self.project.settings);
         self.save_path = self.suggested_save_path();
         self.import_path = self.project_dir.display().to_string();
         self.refresh_missing();
         self.invalidate_preview();
-        self.title_draft = Title::opening("Untitled");
-        self.set_status("New project", false);
+        self.title_draft = Title::opening_for(&self.project.name, &self.project.settings);
+        self.set_status(status, false);
         self.dialog = Dialog::None;
     }
 
@@ -1186,6 +1200,10 @@ impl SpliceApp {
                             self.new_project();
                             ui.close_menu();
                         }
+                        if ui.button("New Short project").clicked() {
+                            self.new_short_project();
+                            ui.close_menu();
+                        }
                         if ui.button("Open project…").clicked() {
                             self.open_dialog(Dialog::Open);
                             ui.close_menu();
@@ -1265,6 +1283,8 @@ impl SpliceApp {
                             self.timeline.view = TimelineView::Timeline;
                             ui.close_menu();
                         }
+                        ui.separator();
+                        ui.checkbox(&mut self.shorts_safe_area, "Shorts safe areas");
                     });
                     ui.menu_button("Help", |ui| {
                         if ui.button("About Splice").clicked() {
@@ -1338,6 +1358,9 @@ impl SpliceApp {
                     ui.separator();
                     if ui.button("New").clicked() {
                         self.new_project();
+                    }
+                    if ui.button("New Short").clicked() {
+                        self.new_short_project();
                     }
                     if ui.button("Open").clicked() {
                         self.open_dialog(Dialog::Open);
@@ -1785,6 +1808,11 @@ impl SpliceApp {
             )
             .show(ctx, |ui| {
                 let duration = self.duration();
+                let canvas_width = self.project.settings.width;
+                let canvas_height = self.project.settings.height;
+                let canvas_aspect = self.project.settings.aspect_ratio();
+                let is_short = self.project.settings.is_short();
+                let (proxy_width, proxy_height) = preview_dimensions(canvas_width, canvas_height);
                 let (playhead, playing, texture, rendering, diagnostic) =
                     if let Some(preview) = &self.preview {
                         (
@@ -1800,7 +1828,19 @@ impl SpliceApp {
 
                 ui.horizontal(|ui| {
                     theme::section_label(ui, "Preview");
-                    theme::badge(ui, "Proxy 960×540", theme::BLUE);
+                    theme::badge(
+                        ui,
+                        &format!("Proxy {proxy_width}×{proxy_height}"),
+                        theme::BLUE,
+                    );
+                    if is_short {
+                        let (label, color) = if duration > 180.0 {
+                            ("Shorts over 3:00", theme::GOLD)
+                        } else {
+                            ("Shorts 3:00 target", theme::GREEN)
+                        };
+                        theme::badge(ui, label, color);
+                    }
                     if !self.missing.is_empty() {
                         theme::badge(ui, "Offline placeholders", theme::DANGER);
                     }
@@ -1844,7 +1884,7 @@ impl SpliceApp {
                     Stroke::new(1.0_f32, theme::BORDER),
                     egui::StrokeKind::Inside,
                 );
-                let target = fit_rect(outer.shrink(8.0), 16.0 / 9.0);
+                let target = fit_rect(outer.shrink(8.0), canvas_aspect);
                 if let Some(texture) = &texture {
                     painter.image(
                         texture.id(),
@@ -1878,6 +1918,9 @@ impl SpliceApp {
                         color,
                     );
                 }
+                if self.shorts_safe_area && is_short {
+                    paint_short_safe_areas(&painter, target);
+                }
                 painter.text(
                     outer.left_top() + Vec2::new(12.0, 9.0),
                     egui::Align2::LEFT_TOP,
@@ -1888,7 +1931,10 @@ impl SpliceApp {
                 painter.text(
                     outer.right_top() + Vec2::new(-12.0, 9.0),
                     egui::Align2::RIGHT_TOP,
-                    "1920 × 1080 · 30 fps",
+                    format!(
+                        "{canvas_width} × {canvas_height} · {} fps",
+                        self.project.settings.fps
+                    ),
                     FontId::monospace(9.5),
                     theme::MUTED,
                 );
@@ -2338,6 +2384,9 @@ impl SpliceApp {
     fn project_inspector(&mut self, ui: &mut Ui) {
         let snapshot = self.project.clone();
         let mut changed = false;
+        let is_short = self.project.settings.is_short();
+        let mut switch_short = None;
+        let mut switch_framing = None;
         ui.horizontal(|ui| {
             ui.label(RichText::new("Project").size(15.0).strong());
             if self.dirty {
@@ -2370,6 +2419,33 @@ impl SpliceApp {
                     .size(10.5),
                 );
                 ui.end_row();
+                ui.label(RichText::new("Layout").size(10.0).color(theme::MUTED));
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(!is_short, "Landscape").clicked() {
+                        switch_short = Some(false);
+                    }
+                    if ui.selectable_label(is_short, "Shorts").clicked() {
+                        switch_short = Some(true);
+                    }
+                });
+                ui.end_row();
+                ui.label(RichText::new("Framing").size(10.0).color(theme::MUTED));
+                let framing = self.project.settings.framing;
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(framing == Framing::Fit, "Fit")
+                        .clicked()
+                    {
+                        switch_framing = Some(Framing::Fit);
+                    }
+                    if ui
+                        .selectable_label(framing == Framing::Fill, "Fill")
+                        .clicked()
+                    {
+                        switch_framing = Some(Framing::Fill);
+                    }
+                });
+                ui.end_row();
                 ui.label(RichText::new("Audio").size(10.0).color(theme::MUTED));
                 ui.label(
                     RichText::new(format!("{} Hz · stereo", self.project.settings.sample_rate))
@@ -2397,6 +2473,25 @@ impl SpliceApp {
                 ui.label(RichText::new(self.clip_count().to_string()).size(10.5));
                 ui.end_row();
             });
+
+        if let Some(short) = switch_short {
+            self.project.settings = if short {
+                Settings::shorts()
+            } else {
+                Settings::default()
+            };
+            self.export_preset = ExportPreset::matching(&self.project.settings);
+            self.title_draft = Title::opening_for(&self.project.name, &self.project.settings);
+            self.invalidate_preview();
+            changed = true;
+        }
+        if let Some(framing) = switch_framing {
+            if self.project.settings.framing != framing {
+                self.project.settings.framing = framing;
+                self.invalidate_preview();
+                changed = true;
+            }
+        }
 
         ui.add_space(8.0);
         ui.separator();
@@ -2654,27 +2749,33 @@ impl SpliceApp {
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .default_width(520.0)
             .show(ctx, |ui| {
-                theme::section_label(ui, "Preset");
                 let mut preset_changed = false;
-                ui.horizontal_wrapped(|ui| {
-                    for preset in ExportPreset::ALL {
-                        if ui
-                            .selectable_label(
-                                self.export_preset == preset,
-                                format!(
-                                    "{}  {}×{}",
-                                    preset.label(),
-                                    preset.width(),
-                                    preset.height()
-                                ),
-                            )
-                            .clicked()
+                for (heading, vertical) in [("Landscape 16:9", false), ("Shorts 9:16", true)] {
+                    theme::section_label(ui, heading);
+                    ui.horizontal_wrapped(|ui| {
+                        for preset in ExportPreset::ALL
+                            .into_iter()
+                            .filter(|preset| preset.is_vertical() == vertical)
                         {
-                            self.export_preset = preset;
-                            preset_changed = true;
+                            if ui
+                                .selectable_label(
+                                    self.export_preset == preset,
+                                    format!(
+                                        "{}  {}×{}",
+                                        preset.label(),
+                                        preset.width(),
+                                        preset.height()
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                self.export_preset = preset;
+                                preset_changed = true;
+                            }
                         }
-                    }
-                });
+                    });
+                    ui.add_space(4.0);
+                }
                 if preset_changed {
                     self.export_path = self.suggested_export_path();
                 }
@@ -3727,4 +3828,36 @@ fn fit_rect(bounds: Rect, aspect: f32) -> Rect {
         width = height * aspect;
     }
     Rect::from_center_size(bounds.center(), Vec2::new(width.max(1.0), height.max(1.0)))
+}
+
+fn paint_short_safe_areas(painter: &egui::Painter, frame: Rect) {
+    let top = frame.top() + frame.height() * 0.10;
+    let bottom = frame.bottom() - frame.height() * 0.20;
+    let right = frame.right() - frame.width() * 0.15;
+    let safe = Rect::from_min_max(egui::pos2(frame.left(), top), egui::pos2(right, bottom));
+    let shade = Color32::from_black_alpha(35);
+    painter.rect_filled(
+        Rect::from_min_max(frame.min, egui::pos2(frame.right(), top)),
+        egui::CornerRadius::ZERO,
+        shade,
+    );
+    painter.rect_filled(
+        Rect::from_min_max(egui::pos2(frame.left(), bottom), frame.max),
+        egui::CornerRadius::ZERO,
+        shade,
+    );
+    painter.rect_filled(
+        Rect::from_min_max(
+            egui::pos2(right, frame.top()),
+            egui::pos2(frame.right(), frame.bottom()),
+        ),
+        egui::CornerRadius::ZERO,
+        shade,
+    );
+    painter.rect_stroke(
+        safe,
+        egui::CornerRadius::ZERO,
+        Stroke::new(1.0_f32, theme::GOLD),
+        egui::StrokeKind::Inside,
+    );
 }

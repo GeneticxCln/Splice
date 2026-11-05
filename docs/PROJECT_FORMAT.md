@@ -15,7 +15,8 @@ format is versioned so a future schema can migrate instead of guessing.
     "height": 1080,
     "fps": 30,
     "sample_rate": 48000,
-    "background": "#0d1016"
+    "background": "#0d1016",
+    "framing": "fit"
   },
   "media": [],
   "tracks": []
@@ -27,7 +28,7 @@ format is versioned so a future schema can migrate instead of guessing.
 | `format` | Always `splice-project`. Any other value is rejected. |
 | `version` | Integer schema version. This build writes `1`. Files with a newer version are rejected with a clear error; version `0` is rejected because no migration exists. |
 | `name` | Project name shown in the title bar. |
-| `settings` | Canvas size, frame rate, sample rate, and preview letterbox colour. |
+| `settings` | Canvas size, frame rate, sample rate, preview letterbox colour, and visual framing. |
 | `media` | Probed source assets. Sources are referenced, never copied or rewritten. |
 | `tracks` | Ordered video/overlay/audio tracks containing clips. |
 
@@ -154,3 +155,8 @@ Adding an optional field with a serde default is a version-preserving change.
 Any breaking change to meaning, removal, or required field must bump `version`
 and add a migration in `project_io::migrate`. Saving always writes the current
 version.
+
+`settings.framing` is one such optional field. It is `fit` when absent, which
+matches the original version 1 behaviour. `fill` scales visual clips to cover
+the canvas and center-crops them. New 9:16 Short projects use `fill`; landscape
+projects continue to use `fit`. No schema migration is required.
