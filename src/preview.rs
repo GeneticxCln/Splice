@@ -575,3 +575,61 @@ fn ffmpeg_available(tools: Option<&Toolchain>) -> Result<()> {
         None => bail!("ffmpeg unavailable"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cpal::traits::HostTrait;
+
+    /// Hardware gate for the Play button path: the preview must open the real
+    /// default output and consume decoded proxy audio.
+    #[test]
+    #[ignore = "requires a default audio output device and system ffmpeg"]
+    fn playback_starts_audio_monitor() {
+        if cpal::default_host().default_output_device().is_none() {
+            eprintln!("no default output device; skipping");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let proxy = dir.path().join("proxy.mp4");
+        let status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x180:rate=30:duration=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=2",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-shortest",
+            ])
+            .arg(&proxy)
+            .status()
+            .expect("run ffmpeg");
+        assert!(status.success(), "could not generate the proxy fixture");
+
+        let mut preview = Preview::new().expect("preview");
+        preview.proxy = Some(proxy);
+        preview.proxy_duration = 2.0;
+        preview.toggle_playback(2.0);
+        assert!(preview.playing, "preview should be playing");
+        let monitor = preview.audio.as_ref().expect("audio monitor should start");
+        std::thread::sleep(Duration::from_millis(600));
+        let frames = monitor.played_frames();
+        preview.stop_playback();
+        assert!(frames > 0, "playback fed no audio to the output device");
+    }
+}

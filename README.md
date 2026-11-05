@@ -114,11 +114,12 @@ The deterministic suite covers the project round-trip, version refusal, offline
 assets and relinking, every transition/effect/title style, AutoMovie, export at
 all three presets, CLI blocking, and measured frame/audio properties.
 
-The preview audio path is hardware-backed, so its gate is marked ignored for
-headless machines. Run it where a default output exists:
+The preview audio path is hardware-backed, so its gates are marked ignored for
+headless machines. Run them where a default output exists:
 
 ```sh
 cargo test --lib audio::tests::audio_monitor_plays_decoded_audio -- --ignored --nocapture
+cargo test --lib preview::tests::playback_starts_audio_monitor -- --ignored --nocapture
 ```
 
 ## Source layout

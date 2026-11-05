@@ -353,12 +353,27 @@ The test asserts that the real default output callback consumed decoded frames
 (`played_frames > 0`). The default sink at the time was
 `alsa_output.usb-Creative_Technology_Ltd_SB_Omni_Surround_5.1_...analog-stereo-output`.
 
+The same hardware gate is repeated through the actual Play path
+(`Preview::toggle_playback`, not just the monitor in isolation):
+
+```sh
+cargo test --lib preview::tests::playback_starts_audio_monitor -- --ignored --nocapture
+```
+
+Exit status: 0. Output:
+
+```text
+running 1 test
+test preview::tests::playback_starts_audio_monitor ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.69s
+```
+
 Deterministic gates after the change:
 
 ```text
 cargo fmt --check                                    exit 0
 cargo clippy --all-targets -- -D warnings           exit 0
-cargo test      6 passed + 1 ignored (lib), 8 passed (full_suite), 2 passed (render_smoke); 0 failed
+cargo test      6 passed + 2 ignored (lib), 8 passed (full_suite), 2 passed (render_smoke); 0 failed
 ```
 
 Gate status: PASS.
@@ -370,3 +385,7 @@ The audit found no git repository and no README. Both are now in place:
 demo media/video/project out of it, and `README.md` documents the build, the GUI
 and CLI, the reproducible demo, the project and export contracts, the hardware
 audio gate, and the remaining product limitations.
+
+The initial commit is `38dbfa0` ("Initial commit: Splice native Linux timeline
+editor"). The two hardware audio gates are `#[ignore]` by design so `cargo test`
+stays deterministic on headless machines; both were run explicitly above.
