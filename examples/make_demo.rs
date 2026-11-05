@@ -100,6 +100,13 @@ fn main() -> Result<()> {
             .effects
             .push(make_effect(kind).context("catalog effect")?);
     }
+    let mut balance = make_effect(EffectKind::ColorBalance).context("colour balance effect")?;
+    balance.params.insert("red".to_string(), 0.12);
+    balance.params.insert("blue".to_string(), -0.08);
+    first.effects.push(balance);
+    first
+        .effects
+        .push(make_effect(EffectKind::Vibrance).context("vibrance effect")?);
     let first_id = first.id.clone();
     project
         .primary_video_track_mut()
@@ -115,20 +122,23 @@ fn main() -> Result<()> {
             .clip_by_id_mut(&second_id)
             .context("split clip must exist")?;
         second.transition = Some(Transition {
-            kind: TransitionKind::Dissolve,
+            kind: TransitionKind::SmoothLeft,
             duration: 0.5,
         });
         second.audio.muted = true;
         second
             .effects
             .push(make_effect(EffectKind::Temperature).context("temperature effect")?);
+        second
+            .effects
+            .push(make_effect(EffectKind::FilmGrain).context("film grain effect")?);
     }
 
-    // Mandelbrot clip with a fade and a vignette/sharpen combo.
+    // Mandelbrot clip with a circular crop and a vignette/sharpen/deband combo.
     let mut second = default_clip_for(&clip_b, 0.0);
     second.out_point = 5.5;
     second.transition = Some(Transition {
-        kind: TransitionKind::Fade,
+        kind: TransitionKind::CircleCrop,
         duration: 0.6,
     });
     second.audio = AudioParams {
@@ -141,17 +151,20 @@ fn main() -> Result<()> {
     second
         .effects
         .push(make_effect(EffectKind::Sharpen).context("sharpen effect")?);
+    second
+        .effects
+        .push(make_effect(EffectKind::Deband).context("deband effect")?);
     project
         .primary_video_track_mut()
         .expect("primary video track")
         .clips
         .push(second);
 
-    // Still image with animated pan-and-zoom and a wipe.
+    // Still image with animated pan-and-zoom, a film curve and a radial reveal.
     let mut still = default_clip_for(&photo, 0.0);
     still.out_point = 4.0;
     still.transition = Some(Transition {
-        kind: TransitionKind::WipeLeft,
+        kind: TransitionKind::Radial,
         duration: 0.5,
     });
     still
@@ -160,21 +173,26 @@ fn main() -> Result<()> {
     still
         .effects
         .push(make_effect(EffectKind::Blur).context("blur effect")?);
+    still
+        .effects
+        .push(make_effect(EffectKind::FilmCurve).context("film curve effect")?);
     project
         .primary_video_track_mut()
         .expect("primary video track")
         .clips
         .push(still);
 
-    // Closing colour bars with a circular reveal and hue rotation.
+    // Closing colour bars with a horizontal blur and hue/chroma shifts.
     let mut last = default_clip_for(&clip_c, 0.0);
     last.out_point = 5.5;
     last.transition = Some(Transition {
-        kind: TransitionKind::CircleOpen,
+        kind: TransitionKind::HBlur,
         duration: 0.5,
     });
     last.effects
         .push(make_effect(EffectKind::HueRotate).context("hue effect")?);
+    last.effects
+        .push(make_effect(EffectKind::ChromaShift).context("chroma shift effect")?);
     project
         .primary_video_track_mut()
         .expect("primary video track")

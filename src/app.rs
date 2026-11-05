@@ -82,6 +82,8 @@ pub struct SpliceApp {
     save_path: String,
     import_path: String,
     relink_path: String,
+    effect_filter: String,
+    transition_filter: String,
 
     export_preset: ExportPreset,
     export_path: String,
@@ -155,6 +157,8 @@ impl SpliceApp {
             save_path: String::new(),
             import_path: String::new(),
             relink_path: String::new(),
+            effect_filter: String::new(),
+            transition_filter: String::new(),
             export_preset: ExportPreset::P1080p,
             export_path: String::new(),
             export_rx: None,
@@ -2110,17 +2114,29 @@ impl SpliceApp {
                     .selected_text(current)
                     .width(180.0)
                     .show_ui(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.transition_filter)
+                                .hint_text("Search transitions…")
+                                .desired_width(220.0),
+                        );
+                        let query = self.transition_filter.trim().to_lowercase();
+                        let mut shown = 0usize;
                         egui::ScrollArea::vertical()
                             .max_height(320.0)
                             .show(ui, |ui| {
-                                if ui
-                                    .selectable_label(clip.transition.is_none(), "None")
-                                    .clicked()
+                                if query.is_empty()
+                                    && ui
+                                        .selectable_label(clip.transition.is_none(), "None")
+                                        .clicked()
                                 {
                                     clip.transition = None;
                                     changed = true;
                                 }
                                 for (name, kind) in TRANSITIONS {
+                                    if !query.is_empty() && !name.to_lowercase().contains(&query) {
+                                        continue;
+                                    }
+                                    shown += 1;
                                     let selected = clip
                                         .transition
                                         .as_ref()
@@ -2137,10 +2153,14 @@ impl SpliceApp {
                                                     catalog::default_transition_duration,
                                                 ),
                                         });
+                                        self.transition_filter.clear();
                                         changed = true;
                                     }
                                 }
                             });
+                        if shown == 0 && !query.is_empty() {
+                            theme::muted(ui, "No transitions match that search.");
+                        }
                     });
                 if let Some(transition) = &mut clip.transition {
                     let response = ui.add(
@@ -2195,20 +2215,48 @@ impl SpliceApp {
                 changed = true;
             }
             ui.menu_button("+ Add effect", |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.effect_filter)
+                        .hint_text("Search effects…")
+                        .desired_width(240.0),
+                );
+                let query = self.effect_filter.trim().to_lowercase();
+                let mut shown = 0usize;
                 egui::ScrollArea::vertical()
                     .max_height(420.0)
                     .show(ui, |ui| {
-                        for def in EFFECTS {
-                            let response = ui.button(def.name).on_hover_text(def.description);
-                            if response.clicked() {
-                                if let Some(effect) = catalog::make_effect(def.kind) {
-                                    clip.effects.push(effect);
-                                    changed = true;
+                        for (category, kinds) in catalog::EFFECT_CATEGORIES {
+                            let mut category_header = false;
+                            for def in EFFECTS {
+                                if !kinds.contains(&def.kind) {
+                                    continue;
                                 }
-                                ui.close_menu();
+                                if !query.is_empty()
+                                    && !def.name.to_lowercase().contains(&query)
+                                    && !def.description.to_lowercase().contains(&query)
+                                {
+                                    continue;
+                                }
+                                if !category_header {
+                                    theme::section_label(ui, *category);
+                                    category_header = true;
+                                }
+                                shown += 1;
+                                let response = ui.button(def.name).on_hover_text(def.description);
+                                if response.clicked() {
+                                    if let Some(effect) = catalog::make_effect(def.kind) {
+                                        clip.effects.push(effect);
+                                        changed = true;
+                                    }
+                                    self.effect_filter.clear();
+                                    ui.close_menu();
+                                }
                             }
                         }
                     });
+                if shown == 0 {
+                    theme::muted(ui, "No effects match that search.");
+                }
             });
         }
 

@@ -13,7 +13,7 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 use splice::automovie::{self, AutoMovieOptions};
-use splice::catalog::{make_effect, EFFECTS, TITLE_STYLES, TRANSITIONS};
+use splice::catalog::{make_effect, EFFECTS, EFFECT_CATEGORIES, TITLE_STYLES, TRANSITIONS};
 use splice::edit;
 use splice::export::export_project;
 use splice::ffmpeg::Toolchain;
@@ -313,6 +313,26 @@ fn catalog_and_presets_are_complete() {
         EffectKind::ALL.len(),
         "effect kinds must be unique"
     );
+    let mut categorized = Vec::new();
+    for (_, kinds) in EFFECT_CATEGORIES {
+        categorized.extend_from_slice(kinds);
+    }
+    assert_eq!(
+        categorized.len(),
+        EffectKind::ALL.len(),
+        "every effect must belong to exactly one picker category"
+    );
+    for kind in EffectKind::ALL {
+        assert_eq!(
+            categorized
+                .iter()
+                .filter(|candidate| *candidate == kind)
+                .count(),
+            1,
+            "effect {kind:?} must appear in exactly one category"
+        );
+    }
+
     for definition in EFFECTS {
         let effect = make_effect(definition.kind).expect("make effect");
         assert_eq!(

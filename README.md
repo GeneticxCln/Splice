@@ -14,6 +14,7 @@ Splice is fully offline: no network calls, telemetry, uploads or auto-update.
 - 58 transitions (the full ffmpeg `xfade` set) and 38 effects covering tone,
   colour, denoise, blur, distortion, pixelation and colour-ramp looks, plus 10
   animated title styles.
+- Categorized effect picker with live search, and a searchable transition menu.
 - AutoMovie: opening title, scene crossfades, closing credits and an optional
   music bed fitted to the movie length.
 - Voiceover recording from the default input through cpal.

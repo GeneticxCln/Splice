@@ -390,6 +390,68 @@ pub const EFFECTS: &[EffectDef] = &[
     },
 ];
 
+/// Effect-picker groupings. Every `EffectKind` must appear exactly once.
+pub const EFFECT_CATEGORIES: &[(&str, &[EffectKind])] = &[
+    (
+        "Tone & Colour",
+        &[
+            EffectKind::Brightness,
+            EffectKind::Contrast,
+            EffectKind::Saturation,
+            EffectKind::HueRotate,
+            EffectKind::Monochrome,
+            EffectKind::Temperature,
+            EffectKind::Gamma,
+            EffectKind::ColorBalance,
+            EffectKind::Vibrance,
+            EffectKind::HueSaturation,
+            EffectKind::Colorize,
+            EffectKind::Invert,
+            EffectKind::Levels,
+            EffectKind::FilmCurve,
+            EffectKind::HeatMap,
+            EffectKind::ColorContrast,
+            EffectKind::ColorCorrect,
+        ],
+    ),
+    (
+        "Blur & Detail",
+        &[
+            EffectKind::Sharpen,
+            EffectKind::Blur,
+            EffectKind::Median,
+            EffectKind::SmartBlur,
+            EffectKind::BoxBlur,
+            EffectKind::Bilateral,
+            EffectKind::Deband,
+            EffectKind::Denoise,
+            EffectKind::Deblock,
+        ],
+    ),
+    (
+        "Stylize",
+        &[
+            EffectKind::Vignette,
+            EffectKind::EdgeDetect,
+            EffectKind::FilmGrain,
+            EffectKind::Posterize,
+            EffectKind::Pixelate,
+        ],
+    ),
+    (
+        "Distortion",
+        &[
+            EffectKind::ChromaShift,
+            EffectKind::RgbSplit,
+            EffectKind::LensCorrection,
+            EffectKind::Rotate,
+            EffectKind::FlipHorizontal,
+            EffectKind::FlipVertical,
+        ],
+    ),
+    ("Motion", &[EffectKind::PanZoom]),
+];
+
 pub const TITLE_STYLES: &[(&str, TitleStyle)] = &[
     ("Fade", TitleStyle::Fade),
     ("Rise", TitleStyle::Rise),

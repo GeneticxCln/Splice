@@ -434,3 +434,50 @@ cargo test      6 passed + 2 ignored (lib), 8 passed (full_suite), 2 passed (ren
 
 The two ignored tests are the existing hardware audio gates from Slice 6.
 Gate status: PASS.
+
+## Slice 9 — categorized/searchable pickers and refreshed demo
+
+The effect picker is grouped into five categories (`Tone & Colour`,
+`Blur & Detail`, `Stylize`, `Distortion`, `Motion`) and both the effect and
+transition menus have live search fields. `EFFECT_CATEGORIES` in
+`src/catalog.rs` is the single source of truth; the catalog test asserts every
+`EffectKind` appears in exactly one category.
+
+Demo refresh — `examples/make_demo.rs` now exercises `ColorBalance`,
+`Vibrance`, `FilmGrain`, `Deband`, `FilmCurve` and `ChromaShift`, with the
+`SmoothLeft`, `CircleCrop`, `Radial` and `HBlur` transitions. The saved project
+inventory is:
+
+```text
+clip-a          transition=None         effects=brightness,contrast,saturation,color_balance,vibrance
+clip-a (split)  transition=smooth_left  effects=brightness,contrast,saturation,color_balance,vibrance,temperature,film_grain
+clip-b          transition=circle_crop  effects=vignette,sharpen,deband
+photo           transition=radial       effects=pan_zoom,blur,film_curve
+clip-c          transition=h_blur       effects=hue_rotate,chroma_shift
+```
+
+`bash scripts/demo.sh` exited 0 and regenerated the artifacts:
+
+```text
+DEMO_PROJECT_OK docs/demo.splice duration=21.50s media=5 video_clips=5 title_clips=2
+EXPORT_OK docs/demo.mp4 preset=1080p duration=21.50s
+codec_name=h264 / 1920x1080 / 30 fps
+codec_name=aac / 48000 Hz / 2 ch
+SCREENSHOT_OK docs/screenshot.png 1920x2067
+DEMO_OK project=docs/demo.splice video=docs/demo.mp4 screenshot=docs/screenshot.png
+```
+
+The screenshot is a real eframe framebuffer capture at playhead 2.5 s; the
+inspector shows the new `Color Balance` and `Vibrance` effects alongside the
+three original tone effects, and the timeline contains the four new transition
+kinds.
+
+Gates after the change:
+
+```text
+cargo fmt --check                                    exit 0
+cargo clippy --all-targets -- -D warnings           exit 0
+cargo test      6 passed + 2 ignored (lib), 8 passed (full_suite), 2 passed (render_smoke); 0 failed
+```
+
+Gate status: PASS.
