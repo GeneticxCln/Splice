@@ -318,43 +318,43 @@ fn show_storyboard(
                     response.context_menu(|ui| {
                         if ui.button("Select").clicked() {
                             actions.push(TimelineAction::SelectClip(clip_id.clone()));
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Seek here").clicked() {
                             actions.push(TimelineAction::Seek(clip.start));
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if ui.button("Split at playhead").clicked() {
                             actions.push(TimelineAction::Command(
                                 TimelineCommand::SplitAtPlayhead(clip_id.clone()),
                             ));
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Duplicate").clicked() {
                             actions.push(TimelineAction::Command(TimelineCommand::Duplicate(
                                 clip_id.clone(),
                             )));
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Delete").clicked() {
                             actions.push(TimelineAction::Command(TimelineCommand::Delete(
                                 clip_id.clone(),
                             )));
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if ui.button("Move left").clicked() {
                             actions.push(TimelineAction::Command(TimelineCommand::MoveLeft(
                                 clip_id.clone(),
                             )));
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Move right").clicked() {
                             actions.push(TimelineAction::Command(TimelineCommand::MoveRight(
                                 clip_id.clone(),
                             )));
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         ui.menu_button("Incoming transition", |ui| {
@@ -362,14 +362,14 @@ fn show_storyboard(
                                 actions.push(TimelineAction::Command(
                                     TimelineCommand::RemoveTransition(clip_id.clone()),
                                 ));
-                                ui.close_menu();
+                                ui.close();
                             }
                             for (name, kind) in TRANSITIONS {
                                 if ui.button(*name).clicked() {
                                     actions.push(TimelineAction::Command(
                                         TimelineCommand::SetTransition(clip_id.clone(), *kind),
                                     ));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             }
                         });
@@ -746,30 +746,30 @@ fn show_tracks(
                         clip_resp.context_menu(|ui| {
                             if ui.button("Select").clicked() {
                                 actions.push(TimelineAction::SelectClip(clip_id.clone()));
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button("Seek to clip").clicked() {
                                 actions.push(TimelineAction::Seek(start));
-                                ui.close_menu();
+                                ui.close();
                             }
                             ui.separator();
                             if ui.button("Split at playhead").clicked() {
                                 actions.push(TimelineAction::Command(
                                     TimelineCommand::SplitAtPlayhead(clip_id.clone()),
                                 ));
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button("Duplicate").clicked() {
                                 actions.push(TimelineAction::Command(TimelineCommand::Duplicate(
                                     clip_id.clone(),
                                 )));
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button("Delete").clicked() {
                                 actions.push(TimelineAction::Command(TimelineCommand::Delete(
                                     clip_id.clone(),
                                 )));
-                                ui.close_menu();
+                                ui.close();
                             }
                             ui.separator();
                             ui.menu_button("Incoming transition", |ui| {
@@ -777,14 +777,14 @@ fn show_tracks(
                                     actions.push(TimelineAction::Command(
                                         TimelineCommand::RemoveTransition(clip_id.clone()),
                                     ));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 for (name, kind) in TRANSITIONS {
                                     if ui.button(*name).clicked() {
                                         actions.push(TimelineAction::Command(
                                             TimelineCommand::SetTransition(clip_id.clone(), *kind),
                                         ));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                 }
                             });

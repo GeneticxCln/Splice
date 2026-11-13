@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, Sample, SampleFormat, SampleRate, SizedSample, SupportedStreamConfig};
+use cpal::{FromSample, Sample, SampleFormat, SizedSample, SupportedStreamConfig};
 
 #[derive(Debug, Clone)]
 pub struct RecordingStats {
@@ -51,10 +51,13 @@ impl Recorder {
         let device = host
             .default_input_device()
             .context("no default input device is available")?;
-        let device_name = device.name().unwrap_or_else(|_| "default input".into());
+        let device_name = device
+            .description()
+            .map(|description| description.name().to_string())
+            .unwrap_or_else(|_| "default input".into());
         let host_name = host.id().name().to_string();
         let config = choose_config(&device)?;
-        let sample_rate = config.sample_rate().0;
+        let sample_rate = config.sample_rate();
         let channels = config.channels();
         let sample_format = config.sample_format();
         let stream_config = config.config();
@@ -174,7 +177,7 @@ impl AudioMonitor {
         let supported = device
             .default_output_config()
             .context("default output device has no configuration")?;
-        let sample_rate = supported.sample_rate().0;
+        let sample_rate = supported.sample_rate();
         let channels = supported.channels();
         let sample_format = supported.sample_format();
         let config = supported.config();
@@ -443,7 +446,7 @@ where
     let error_slot = Arc::clone(&shared);
     device
         .build_output_stream(
-            config,
+            *config,
             move |data: &mut [T], _info| {
                 let mut shared = shared.lock().expect("audio monitor poisoned");
                 if shared.samples.len() >= data.len() {
@@ -479,13 +482,16 @@ pub fn describe_default_input() -> Result<String> {
     let device = host
         .default_input_device()
         .context("no default input device is available")?;
-    let name = device.name().unwrap_or_else(|_| "default input".into());
+    let name = device
+        .description()
+        .map(|description| description.name().to_string())
+        .unwrap_or_else(|_| "default input".into());
     let config = choose_config(&device)?;
     Ok(format!(
         "{} ({}) {} Hz, {} ch, {:?}",
         name,
         host.id().name(),
-        config.sample_rate().0,
+        config.sample_rate(),
         config.channels(),
         config.sample_format()
     ))
@@ -499,7 +505,7 @@ fn choose_config(device: &cpal::Device) -> Result<SupportedStreamConfig> {
     if let Ok(ranges) = device.supported_input_configs() {
         let mut best: Option<(u8, SupportedStreamConfig)> = None;
         for range in ranges {
-            if range.min_sample_rate().0 <= 48_000 && range.max_sample_rate().0 >= 48_000 {
+            if range.min_sample_rate() <= 48_000 && range.max_sample_rate() >= 48_000 {
                 let format_rank = match range.sample_format() {
                     SampleFormat::F32 => 0,
                     SampleFormat::I16 => 1,
@@ -518,7 +524,7 @@ fn choose_config(device: &cpal::Device) -> Result<SupportedStreamConfig> {
                     2
                 };
                 let rank = format_rank + channel_rank;
-                let candidate = range.with_sample_rate(SampleRate(48_000));
+                let candidate = range.with_sample_rate(48_000);
                 if best
                     .as_ref()
                     .map(|(best_rank, _)| rank < *best_rank)
@@ -575,7 +581,7 @@ where
 {
     let stream = device
         .build_input_stream(
-            config,
+            *config,
             move |data: &[T], _info| {
                 let mut buffer = buffer.lock().expect("microphone buffer poisoned");
                 buffer.extend(data.iter().map(|sample| f32::from_sample(*sample)));

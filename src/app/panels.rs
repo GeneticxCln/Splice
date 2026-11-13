@@ -11,42 +11,42 @@ impl SpliceApp {
                     .inner_margin(egui::Margin::symmetric(10, 2)),
             )
             .show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button("File", |ui| {
                         if ui.button("New project").clicked() {
                             self.request(ctx, PendingAction::NewProject);
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("New Short project").clicked() {
                             self.request(ctx, PendingAction::NewShort);
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Open project…").clicked() {
                             self.open_dialog(Dialog::Open);
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if ui.button("Save").clicked() {
                             self.save_current(ctx);
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Save as…").clicked() {
                             self.open_dialog(Dialog::SaveAs);
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if ui.button("Import media…").clicked() {
                             self.open_dialog(Dialog::Import);
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Export movie…").clicked() {
                             self.open_dialog(Dialog::Export);
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if ui.button("Quit").clicked() {
                             self.request(ctx, PendingAction::Quit);
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                     ui.menu_button("Edit", |ui| {
@@ -55,51 +55,51 @@ impl SpliceApp {
                             .clicked()
                         {
                             self.undo();
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui
                             .add_enabled(self.history.can_redo(), egui::Button::new("Redo"))
                             .clicked()
                         {
                             self.redo();
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if ui.button("Split at playhead").clicked() {
                             self.split_selected();
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Duplicate clip").clicked() {
                             self.duplicate_selected();
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Delete clip").clicked() {
                             self.delete_selected();
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                     ui.menu_button("Add", |ui| {
                         if ui.button("Title…").clicked() {
                             self.open_dialog(Dialog::Title);
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("AutoMovie…").clicked() {
                             self.open_dialog(Dialog::AutoMovie);
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Voiceover…").clicked() {
                             self.open_dialog(Dialog::Voiceover);
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                     ui.menu_button("View", |ui| {
                         if ui.button("Storyboard").clicked() {
                             self.timeline.view = TimelineView::Storyboard;
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Timeline").clicked() {
                             self.timeline.view = TimelineView::Timeline;
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         ui.checkbox(&mut self.shorts_safe_area, "Shorts safe areas");
@@ -107,7 +107,7 @@ impl SpliceApp {
                     ui.menu_button("Help", |ui| {
                         if ui.button("About Splice").clicked() {
                             self.open_dialog(Dialog::About);
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
 
@@ -1156,7 +1156,7 @@ impl SpliceApp {
                                         changed = true;
                                     }
                                     self.effect_filter.clear();
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             }
                         }
