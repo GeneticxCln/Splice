@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::model::{
-    PROJECT_EXTENSION, PROJECT_FORMAT, PROJECT_VERSION, Project, resolve_media_path,
+    PROJECT_EXTENSION, PROJECT_FORMAT, PROJECT_VERSION, Project, TrackKind, resolve_media_path,
     stored_media_path,
 };
 
@@ -187,6 +187,13 @@ fn validate_project(project: &Project) -> Result<()> {
             if !clip.start.is_finite() || clip.start < 0.0 {
                 return Err(ProjectError::Invalid(format!(
                     "clip {} has an invalid timeline start",
+                    clip.id
+                ))
+                .into());
+            }
+            if track.kind == TrackKind::Video && clip.title.is_some() {
+                return Err(ProjectError::Invalid(format!(
+                    "clip {} is a title on the primary video track; titles belong on the Overlay track",
                     clip.id
                 ))
                 .into());

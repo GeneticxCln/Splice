@@ -324,6 +324,40 @@ fn eased_progress(u: &str, easing: MotionEasing) -> String {
     }
 }
 
+/// One interpolated span: the expression applies while the variable is below
+/// `end`, and at or above the previous span's `end`.
+struct Segment {
+    end: String,
+    expr: String,
+}
+
+/// Joins spans into a balanced `if(lt(var,end), left, right)` tree. A linear
+/// chain nests one level per keyframe, and ffmpeg's expression parser rejects
+/// anything nested about 100 deep, which made clips with roughly 90 or more
+/// keyframes unrenderable. The balanced form nests only log2(n) levels.
+fn segment_tree(segments: &[Segment], tail: String, variable: &str) -> String {
+    fn balanced(segments: &[Segment], variable: &str) -> String {
+        if segments.len() == 1 {
+            return segments[0].expr.clone();
+        }
+        let mid = segments.len() / 2;
+        format!(
+            "if(lt({variable},{}),{},{})",
+            segments[mid - 1].end,
+            balanced(&segments[..mid], variable),
+            balanced(&segments[mid..], variable)
+        )
+    }
+    match segments.last() {
+        None => tail,
+        Some(last) => format!(
+            "if(lt({variable},{}),{},{tail})",
+            last.end,
+            balanced(segments, variable)
+        ),
+    }
+}
+
 fn piecewise(
     frames: &[(i64, MotionValue)],
     property: impl Fn(&MotionValue) -> f64,
@@ -338,23 +372,26 @@ fn piecewise(
         return format!("{:.6}", property(&frames[0].1));
     }
     let last = frames.last().expect("frames checked");
-    let mut expression = format!("{:.6}", property(&last.1));
-    for pair in frames.windows(2).rev() {
+    let mut segments = Vec::with_capacity(frames.len() - 1);
+    for pair in frames.windows(2) {
         let (start_frame, start_value) = pair[0];
         let (end_frame, end_value) = pair[1];
         let span = end_frame - start_frame;
+        // Keyframes that land on the same output frame leave a zero-length
+        // span that can never be selected.
         if span <= 0 {
-            expression = format!("{:.6}", property(&end_value));
             continue;
         }
         let start = property(&start_value);
         let end = property(&end_value);
         let u = format!("(({variable}-{start_frame})/{span})");
         let eased = eased_progress(&u, easing);
-        let segment = format!("{start:.6}+({end:.6}-{start:.6})*{eased}");
-        expression = format!("if(lt({variable},{end_frame}),{segment},{expression})");
+        segments.push(Segment {
+            end: end_frame.to_string(),
+            expr: format!("{start:.6}+({end:.6}-{start:.6})*{eased}"),
+        });
     }
-    expression
+    segment_tree(&segments, format!("{:.6}", property(&last.1)), variable)
 }
 
 fn piecewise_seconds(
@@ -371,23 +408,24 @@ fn piecewise_seconds(
         return format!("{:.6}", property(&points[0].1));
     }
     let last = points.last().expect("points checked");
-    let mut expression = format!("{:.6}", property(&last.1));
-    for pair in points.windows(2).rev() {
+    let mut segments = Vec::with_capacity(points.len() - 1);
+    for pair in points.windows(2) {
         let (start_time, start_value) = pair[0];
         let (end_time, end_value) = pair[1];
         let span = end_time - start_time;
         if span <= 0.0 {
-            expression = format!("{:.6}", property(&end_value));
             continue;
         }
         let start = property(&start_value);
         let end = property(&end_value);
         let u = format!("(({variable}-{start_time:.6})/{span:.6})");
         let eased = eased_progress(&u, easing);
-        let segment = format!("{start:.6}+({end:.6}-{start:.6})*{eased}");
-        expression = format!("if(lt({variable},{end_time:.6}),{segment},{expression})");
+        segments.push(Segment {
+            end: format!("{end_time:.6}"),
+            expr: format!("{start:.6}+({end:.6}-{start:.6})*{eased}"),
+        });
     }
-    expression
+    segment_tree(&segments, format!("{:.6}", property(&last.1)), variable)
 }
 
 #[cfg(test)]
@@ -502,5 +540,151 @@ mod tests {
         assert!(identity.zoompan_expressions(2.0).is_none());
         assert!(identity.rotation_expression(2.0).is_none());
         assert!(identity.opacity_expression(2.0).is_none());
+    }
+
+    /// Deepest `(` nesting in an expression.
+    fn nesting_depth(expression: &str) -> usize {
+        let mut depth = 0usize;
+        let mut deepest = 0usize;
+        for character in expression.chars() {
+            match character {
+                '(' => {
+                    depth += 1;
+                    deepest = deepest.max(depth);
+                }
+                ')' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        deepest
+    }
+
+    fn many_keyframes(count: usize) -> ClipMotion {
+        ClipMotion {
+            keyframes: (0..count)
+                .map(|index| MotionKeyframe {
+                    time: index as f64 * 0.04,
+                    scale: 1.0 + (index % 5) as f64 * 0.1,
+                    pan_x: 0.0,
+                    pan_y: 0.0,
+                    rotation: (index % 9) as f64 * 5.0,
+                    opacity: 1.0 - (index % 4) as f64 * 0.1,
+                })
+                .collect(),
+            easing: MotionEasing::EaseInOut,
+            origin: 0.0,
+        }
+    }
+
+    #[test]
+    fn expression_nesting_stays_logarithmic_in_keyframe_count() {
+        // ffmpeg rejects expressions nested around 100 levels deep.
+        let motion = many_keyframes(512);
+        let duration = 511.0 * 0.04;
+        let (scale, pan_x, _) = motion.zoompan_expressions(duration).expect("scale");
+        let rotation = motion.rotation_expression(duration).expect("rotation");
+        let opacity = motion.opacity_expression(duration).expect("opacity");
+        for expression in [&scale, &pan_x, &rotation, &opacity] {
+            assert!(
+                nesting_depth(expression) < 40,
+                "nesting depth {}",
+                nesting_depth(expression)
+            );
+        }
+    }
+
+    /// Evaluates the balanced tree the way ffmpeg would, to prove it picks the
+    /// same span a linear scan does.
+    #[test]
+    fn balanced_tree_selects_the_same_segment_as_a_linear_scan() {
+        let segments: Vec<Segment> = (0..11)
+            .map(|index| Segment {
+                end: format!("{}", (index + 1) * 10),
+                expr: format!("S{index}"),
+            })
+            .collect();
+        let tree = segment_tree(&segments, "TAIL".to_string(), "v");
+        let evaluate = |expression: &str, value: i64| -> String {
+            // Tiny interpreter for `if(lt(v,N),A,B)` / bare tokens.
+            fn parse(text: &str, value: i64) -> String {
+                if let Some(rest) = text.strip_prefix("if(lt(v,") {
+                    let close = rest.find(')').expect("threshold");
+                    let threshold: i64 = rest[..close].parse().expect("number");
+                    let body = &rest[close + 2..rest.len() - 1];
+                    let mut depth = 0i32;
+                    let mut split = 0usize;
+                    for (position, character) in body.char_indices() {
+                        match character {
+                            '(' => depth += 1,
+                            ')' => depth -= 1,
+                            ',' if depth == 0 => {
+                                split = position;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    let (yes, no) = (&body[..split], &body[split + 1..]);
+                    parse(if value < threshold { yes } else { no }, value)
+                } else {
+                    text.to_string()
+                }
+            }
+            parse(expression, value)
+        };
+        for value in 0..130 {
+            let expected = segments
+                .iter()
+                .find(|segment| value < segment.end.parse::<i64>().unwrap())
+                .map(|segment| segment.expr.clone())
+                .unwrap_or_else(|| "TAIL".to_string());
+            assert_eq!(evaluate(&tree, value), expected, "value {value}");
+        }
+    }
+
+    #[test]
+    fn keyframes_on_the_same_output_frame_do_not_drop_later_spans() {
+        let mut motion = ClipMotion {
+            keyframes: vec![
+                MotionKeyframe {
+                    time: 0.0,
+                    scale: 1.0,
+                    pan_x: 0.0,
+                    pan_y: 0.0,
+                    rotation: 0.0,
+                    opacity: 1.0,
+                },
+                MotionKeyframe {
+                    time: 1.0,
+                    scale: 1.5,
+                    pan_x: 0.0,
+                    pan_y: 0.0,
+                    rotation: 0.0,
+                    opacity: 1.0,
+                },
+                // Rounds to the same 30 fps frame as the keyframe above.
+                MotionKeyframe {
+                    time: 1.012,
+                    scale: 1.6,
+                    pan_x: 0.0,
+                    pan_y: 0.0,
+                    rotation: 0.0,
+                    opacity: 1.0,
+                },
+                MotionKeyframe {
+                    time: 2.0,
+                    scale: 2.0,
+                    pan_x: 0.0,
+                    pan_y: 0.0,
+                    rotation: 0.0,
+                    opacity: 1.0,
+                },
+            ],
+            easing: MotionEasing::Linear,
+            origin: 0.0,
+        };
+        motion.sort_and_dedupe();
+        let (scale, _, _) = motion.zoompan_expressions(2.0).expect("scale");
+        assert!(scale.contains("2.000000"), "later span lost: {scale}");
     }
 }

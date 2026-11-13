@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 use splice::catalog::make_effect;
-use splice::export::export_project;
+use splice::export::{export_project, export_project_with};
 use splice::ffmpeg::Toolchain;
 use splice::library::import_media;
 use splice::model::{
@@ -10,6 +10,7 @@ use splice::model::{
     Title, TitleMotion, TitleMotionPreset, Transition, TransitionKind, default_clip_for,
 };
 use splice::presets::ExportPreset;
+use splice::runner::{Cancelled, RenderControl};
 use tempfile::TempDir;
 
 fn ffmpeg(args: &[&str]) {
@@ -345,4 +346,119 @@ fn title_file_is_optional_for_untitled_project() {
     let report = export_project(&loaded, dir.path(), &tools, ExportPreset::P480p, &output).unwrap();
     assert!(report.duration > 0.0);
     println!("STILL_EXPORT_OK {}", report.duration);
+}
+
+/// A single clip with hundreds of eased keyframes. Its generated filter graph
+/// is larger than the 128 KiB Linux per-argument limit, so it can only run if
+/// the graph is handed to ffmpeg by file.
+fn keyframe_heavy_project(dir: &Path, tools: &Toolchain, keyframes: usize) -> Project {
+    let still_path = dir.join("heavy-still.png");
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=0x305060:s=640x360:d=1",
+        "-frames:v",
+        "1",
+        still_path.to_str().unwrap(),
+    ]);
+    let mut project = Project::new("Heavy motion");
+    let still = import_media(&mut project, Some(dir), tools, &still_path).unwrap();
+    let mut clip = default_clip_for(&still, 0.0);
+    clip.out_point = keyframes as f64 * 0.04;
+    clip.motion = ClipMotion {
+        keyframes: (0..keyframes)
+            .map(|index| MotionKeyframe {
+                time: index as f64 * 0.04,
+                scale: 1.0 + (index % 7) as f64 * 0.05,
+                pan_x: ((index % 5) as f64 - 2.0) * 0.1,
+                pan_y: ((index % 3) as f64 - 1.0) * 0.1,
+                rotation: 0.0,
+                opacity: 1.0,
+            })
+            .collect(),
+        easing: MotionEasing::EaseInOut,
+        origin: 0.0,
+    };
+    project.primary_video_track_mut().unwrap().clips.push(clip);
+    project.reflow_primary();
+    project
+}
+
+#[test]
+fn filter_graph_larger_than_the_argv_limit_still_renders() {
+    let dir = TempDir::new().unwrap();
+    let tools = Toolchain::detect().unwrap();
+    let project = keyframe_heavy_project(dir.path(), &tools, 400);
+    let output = dir.path().join("heavy.mp4");
+    let control = RenderControl::new();
+    let report = export_project_with(
+        &project,
+        dir.path(),
+        &tools,
+        ExportPreset::P480p,
+        &output,
+        &control,
+    )
+    .expect("export with a graph over 128 KiB");
+    assert!(
+        report.graph_bytes > 131_072,
+        "fixture graph is only {} bytes; it must exceed the argv limit",
+        report.graph_bytes
+    );
+    assert!(output.is_file());
+    assert!(
+        control.progress_seconds() > report.duration * 0.9,
+        "progress {} of {}",
+        control.progress_seconds(),
+        report.duration
+    );
+}
+
+#[test]
+fn export_cancel_stops_ffmpeg_and_leaves_no_files() {
+    let dir = TempDir::new().unwrap();
+    let tools = Toolchain::detect().unwrap();
+    let mut project = keyframe_heavy_project(dir.path(), &tools, 500);
+    // Slow filters keep the 1080p encode running for seconds, so the cancel
+    // always lands mid-render rather than after it finished.
+    let clip = &mut project.primary_video_track_mut().unwrap().clips[0];
+    for kind in [EffectKind::Bilateral, EffectKind::Median, EffectKind::Blur] {
+        clip.effects.push(make_effect(kind).unwrap());
+    }
+    let out_dir = dir.path().join("out");
+    let output = out_dir.join("cancelled.mp4");
+    let control = RenderControl::new();
+
+    // Cancel as soon as ffmpeg reports its first encoded frame.
+    let watcher = control.clone();
+    let canceller = std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        while watcher.progress_seconds() <= 0.0 && started.elapsed().as_secs() < 60 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        watcher.cancel();
+    });
+    let error = export_project_with(
+        &project,
+        dir.path(),
+        &tools,
+        ExportPreset::P1080p,
+        &output,
+        &control,
+    )
+    .expect_err("export must be cancelled");
+    canceller.join().unwrap();
+
+    assert!(error.downcast_ref::<Cancelled>().is_some(), "{error:#}");
+    assert!(!output.exists(), "cancelled export left its output");
+    let leftovers: Vec<_> = std::fs::read_dir(&out_dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name())
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "temp files left behind: {leftovers:?}"
+    );
 }

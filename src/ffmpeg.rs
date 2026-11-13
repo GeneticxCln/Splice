@@ -16,6 +16,29 @@ pub struct Toolchain {
     pub aac: bool,
     pub ass_filter: bool,
     pub fontconfig: bool,
+    pub graph_file: GraphFileFlag,
+}
+
+/// How this ffmpeg reads a filter graph from a file. Passing the graph as a
+/// command-line argument is limited to 128 KiB by the Linux kernel, which a
+/// keyframe-heavy project exceeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphFileFlag {
+    /// `-filter_complex_script <file>`: ffmpeg 6 and early 7.
+    Script,
+    /// `-/filter_complex <file>`: ffmpeg 7 and later, where the script flag
+    /// was removed.
+    SlashPrefix,
+}
+
+impl GraphFileFlag {
+    /// The two arguments that load a complex filter graph from `path`.
+    pub fn args(self, path: &Path) -> [std::ffi::OsString; 2] {
+        match self {
+            GraphFileFlag::Script => ["-filter_complex_script".into(), path.into()],
+            GraphFileFlag::SlashPrefix => ["-/filter_complex".into(), path.into()],
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +73,18 @@ impl Toolchain {
             })
             .unwrap_or(false);
         let fontconfig = which("fc-match").is_ok();
+        let graph_file = Command::new(&ffmpeg)
+            .args(["-hide_banner", "-h", "full"])
+            .output()
+            .map(|output| {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if text.contains("filter_complex_script") {
+                    GraphFileFlag::Script
+                } else {
+                    GraphFileFlag::SlashPrefix
+                }
+            })
+            .unwrap_or(GraphFileFlag::SlashPrefix);
 
         Ok(Self {
             ffmpeg,
@@ -60,6 +95,7 @@ impl Toolchain {
             aac: encoders.contains(" aac "),
             ass_filter,
             fontconfig,
+            graph_file,
         })
     }
 

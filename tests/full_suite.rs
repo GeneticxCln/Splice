@@ -550,6 +550,7 @@ fn feature_matrix_renders_all_transitions_effects_and_titles() {
         allow_offline: false,
         level: "3.1".into(),
         output: transition_output.clone(),
+        control: Default::default(),
     };
     let transition_report = render_project(&transitions_project, f.dir.path(), &tools, &options)
         .expect("transition matrix render");
@@ -586,6 +587,7 @@ fn feature_matrix_renders_all_transitions_effects_and_titles() {
         allow_offline: false,
         level: "3.1".into(),
         output: effects_output.clone(),
+        control: Default::default(),
     };
     let effects_report = render_project(&effects_project, f.dir.path(), &tools, &options)
         .expect("effect matrix render");
@@ -963,4 +965,30 @@ fn ffprobe_field(video: &Path, entry: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+#[test]
+fn titles_on_the_primary_video_track_are_rejected_on_save() {
+    let dir = TempDir::new().unwrap();
+    let mut project = empty_project();
+    let clip = splice::model::Clip {
+        id: "title-on-video".into(),
+        name: "bad".into(),
+        media_id: None,
+        start: 0.0,
+        in_point: 0.0,
+        out_point: 2.0,
+        effects: Vec::new(),
+        transition: None,
+        audio: splice::model::AudioParams::default(),
+        title: Some(Title::opening("Misplaced")),
+        motion: splice::model::ClipMotion::default(),
+    };
+    project.primary_video_track_mut().unwrap().clips.push(clip);
+    let path = dir.path().join("bad.splice");
+    let error = save_project(&path, &mut project, Some(dir.path()))
+        .expect_err("a title on the video track cannot be rendered")
+        .to_string();
+    assert!(error.contains("Overlay"), "{error}");
+    assert!(!path.exists());
 }

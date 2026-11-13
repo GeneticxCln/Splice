@@ -12,7 +12,7 @@ use crate::audio::{Recorder, RecordingStats};
 use crate::automovie::{self, AutoMovieOptions};
 use crate::catalog::{self, EFFECTS, FONTS, PALETTE, TITLE_MOTIONS, TITLE_STYLES, TRANSITIONS};
 use crate::edit;
-use crate::export::{ExportReport, export_project};
+use crate::export::{ExportReport, export_project_with};
 use crate::ffmpeg::Toolchain;
 use crate::history::History;
 use crate::library;
@@ -24,6 +24,7 @@ use crate::model::{
 use crate::presets::ExportPreset;
 use crate::preview::{Preview, preview_dimensions};
 use crate::project_io::{load_project, save_project};
+use crate::runner::{Cancelled, RenderControl};
 use crate::theme;
 use crate::timeline_ui::{self, TimelineAction, TimelineCommand, TimelineUiState, TimelineView};
 use crate::titles;
@@ -49,6 +50,18 @@ enum Dialog {
     Relink(String),
     Missing,
     About,
+    /// Asks what to do with unsaved changes before running the action.
+    ConfirmDiscard(PendingAction),
+}
+
+/// A project-replacing action held back while the user decides about unsaved
+/// changes.
+#[derive(Debug, Clone, PartialEq)]
+enum PendingAction {
+    NewProject,
+    NewShort,
+    Open(PathBuf),
+    Quit,
 }
 
 struct VoiceSession {
@@ -56,7 +69,12 @@ struct VoiceSession {
     start_time: f64,
 }
 
-type ExportOutcome = std::result::Result<ExportReport, String>;
+enum ExportFailure {
+    Cancelled,
+    Failed(String),
+}
+
+type ExportOutcome = std::result::Result<ExportReport, ExportFailure>;
 
 pub struct SpliceApp {
     project: Project,
@@ -92,6 +110,10 @@ pub struct SpliceApp {
     export_path: String,
     export_rx: Option<Receiver<ExportOutcome>>,
     export_started: Option<Instant>,
+    export_control: Option<RenderControl>,
+    export_total: f64,
+    after_save: Option<PendingAction>,
+    close_confirmed: bool,
 
     automovie: AutoMovieOptions,
     automovie_error: Option<String>,
@@ -168,6 +190,10 @@ impl SpliceApp {
             export_path: String::new(),
             export_rx: None,
             export_started: None,
+            export_control: None,
+            export_total: 0.0,
+            after_save: None,
+            close_confirmed: false,
             automovie: AutoMovieOptions::default(),
             automovie_error: None,
             title_draft: Title::opening("Untitled"),
@@ -441,6 +467,28 @@ impl SpliceApp {
         self.automovie_error = None;
         self.title_error = None;
         self.voice_error = None;
+        self.after_save = None;
+    }
+
+    /// Runs `action`, first asking about unsaved changes when there are any.
+    fn request(&mut self, ctx: &egui::Context, action: PendingAction) {
+        if self.dirty {
+            self.open_dialog(Dialog::ConfirmDiscard(action));
+        } else {
+            self.perform(ctx, action);
+        }
+    }
+
+    fn perform(&mut self, ctx: &egui::Context, action: PendingAction) {
+        match action {
+            PendingAction::NewProject => self.new_project(),
+            PendingAction::NewShort => self.new_short_project(),
+            PendingAction::Open(path) => self.open_project(&path),
+            PendingAction::Quit => {
+                self.close_confirmed = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
     }
 
     fn save_current(&mut self, ctx: &egui::Context) {
@@ -488,6 +536,9 @@ impl SpliceApp {
                 self.dialog = Dialog::None;
                 self.dialog_error = None;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title("Splice".to_string()));
+                if let Some(action) = self.after_save.take() {
+                    self.perform(ctx, action);
+                }
             }
             Err(error) => {
                 self.dialog_error = Some(format!("{error:#}"));
@@ -535,7 +586,7 @@ impl SpliceApp {
             }
             Err(error) => {
                 self.dialog_error = Some(format!("{error:#}"));
-                self.status_error = true;
+                self.set_status(format!("Could not open project — {error:#}"), true);
             }
         }
     }
@@ -567,7 +618,7 @@ impl SpliceApp {
         self.dialog = Dialog::None;
     }
 
-    fn import_paths(&mut self, paths: Vec<PathBuf>) {
+    fn import_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
         if paths.is_empty() {
             return;
         }
@@ -577,7 +628,8 @@ impl SpliceApp {
                 .map(|extension| extension.eq_ignore_ascii_case("splice"))
                 .unwrap_or(false)
         }) {
-            self.open_project(splice);
+            let splice = splice.clone();
+            self.request(ctx, PendingAction::Open(splice));
             return;
         }
         let Some(tools) = self.tools.clone() else {
@@ -635,7 +687,7 @@ impl SpliceApp {
             );
             return;
         }
-        self.push_undo();
+        let snapshot = self.project.clone();
         let playhead = self.playhead();
         let result = match placement {
             Placement::Timeline => edit::add_asset_to_timeline(&mut self.project, &asset),
@@ -657,6 +709,7 @@ impl SpliceApp {
         };
         match result {
             Ok(id) => {
+                self.push_undo_snapshot(snapshot);
                 if let Some(id) = id {
                     if let Some((_, clip)) = self.project.clip_by_id(&id) {
                         let start = clip.start;
@@ -680,7 +733,11 @@ impl SpliceApp {
                     false,
                 );
             }
-            Err(error) => self.set_status(format!("Could not add clip: {error:#}"), true),
+            Err(error) => {
+                // A failed add may have partly changed the project.
+                self.project = snapshot;
+                self.set_status(format!("Could not add clip: {error:#}"), true);
+            }
         }
     }
 
@@ -701,8 +758,9 @@ impl SpliceApp {
         let Some(id) = self.selected_clip.clone() else {
             return;
         };
-        self.push_undo();
+        let snapshot = self.project.clone();
         if edit::delete_clip(&mut self.project, &id) {
+            self.push_undo_snapshot(snapshot);
             self.selected_clip = None;
             self.mark_edited();
             self.set_status("Clip deleted", false);
@@ -713,9 +771,10 @@ impl SpliceApp {
         let Some(id) = self.selected_clip.clone() else {
             return;
         };
-        self.push_undo();
+        let snapshot = self.project.clone();
         match edit::duplicate_clip(&mut self.project, &id) {
             Ok(new_id) => {
+                self.push_undo_snapshot(snapshot);
                 self.selected_clip = new_id;
                 self.mark_edited();
                 self.set_status("Clip duplicated", false);
@@ -729,9 +788,10 @@ impl SpliceApp {
             return;
         };
         let at = self.playhead();
-        self.push_undo();
+        let snapshot = self.project.clone();
         match edit::split_clip(&mut self.project, &id, at) {
             Ok(new_id) => {
+                self.push_undo_snapshot(snapshot);
                 self.selected_clip = new_id;
                 self.mark_edited();
                 self.set_status(format!("Split at {}", theme::format_time(at)), false);
@@ -863,9 +923,10 @@ impl SpliceApp {
             TimelineCommand::SplitAtPlayhead(id) => {
                 self.selected_clip = Some(id.clone());
                 let at = self.playhead();
-                self.push_undo();
+                let snapshot = self.project.clone();
                 match edit::split_clip(&mut self.project, &id, at) {
                     Ok(new_id) => {
+                        self.push_undo_snapshot(snapshot);
                         self.selected_clip = new_id;
                         self.mark_edited();
                     }
@@ -873,9 +934,10 @@ impl SpliceApp {
                 }
             }
             TimelineCommand::Duplicate(id) => {
-                self.push_undo();
+                let snapshot = self.project.clone();
                 match edit::duplicate_clip(&mut self.project, &id) {
                     Ok(new_id) => {
+                        self.push_undo_snapshot(snapshot);
                         self.selected_clip = new_id;
                         self.mark_edited();
                     }
@@ -883,8 +945,9 @@ impl SpliceApp {
                 }
             }
             TimelineCommand::Delete(id) => {
-                self.push_undo();
+                let snapshot = self.project.clone();
                 if edit::delete_clip(&mut self.project, &id) {
+                    self.push_undo_snapshot(snapshot);
                     if self.selected_clip.as_deref() == Some(id.as_str()) {
                         self.selected_clip = None;
                     }
@@ -977,8 +1040,29 @@ pub fn hex_color(color: Color32) -> String {
 }
 
 impl eframe::App for SpliceApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Stop a running export so ffmpeg is killed and its temporary file is
+        // removed instead of being orphaned when the window closes.
+        if let (Some(control), Some(rx)) = (&self.export_control, &self.export_rx) {
+            control.cancel();
+            let _ = rx.recv_timeout(Duration::from_secs(5));
+        }
+        if let Some(session) = self.voice.take() {
+            let _ = session.recorder.stop();
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
+        if ctx.input(|input| input.viewport().close_requested())
+            && self.dirty
+            && !self.close_confirmed
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if !matches!(self.dialog, Dialog::ConfirmDiscard(_)) {
+                self.open_dialog(Dialog::ConfirmDiscard(PendingAction::Quit));
+            }
+        }
         self.handle_events(ctx);
         self.poll_export();
         self.handle_shortcuts(ctx);
@@ -993,12 +1077,6 @@ impl eframe::App for SpliceApp {
                 duration,
             );
         }
-        if self.preview_error.is_some() {
-            if let Some(error) = self.preview.as_ref().and_then(Preview::diagnostic) {
-                self.preview_error = Some(error);
-            }
-        }
-
         self.top_menu(ctx);
         self.toolbar(ctx);
         self.status_bar(ctx);
@@ -1032,7 +1110,7 @@ impl SpliceApp {
             (dropped, shots)
         });
         if !dropped.is_empty() {
-            self.import_paths(dropped);
+            self.import_paths(ctx, dropped);
         }
         for image in shots {
             self.save_screenshot(ctx, image.as_ref());
@@ -1058,7 +1136,7 @@ impl SpliceApp {
             return;
         }
         if command && ctx.input(|input| input.key_pressed(Key::N)) {
-            self.new_project();
+            self.request(ctx, PendingAction::NewProject);
             return;
         }
         if command && ctx.input(|input| input.key_pressed(Key::E)) {
@@ -1107,7 +1185,9 @@ impl SpliceApp {
                     clear = true;
                 }
                 Err(TryRecvError::Disconnected) => {
-                    outcome = Some(Err("export worker stopped unexpectedly".to_string()));
+                    outcome = Some(Err(ExportFailure::Failed(
+                        "export worker stopped unexpectedly".to_string(),
+                    )));
                     clear = true;
                 }
                 Err(TryRecvError::Empty) => {}
@@ -1116,6 +1196,7 @@ impl SpliceApp {
         if clear {
             self.export_rx = None;
             self.export_started = None;
+            self.export_control = None;
         }
         if let Some(result) = outcome {
             match result {
@@ -1132,7 +1213,11 @@ impl SpliceApp {
                     self.dialog = Dialog::None;
                     self.dialog_error = None;
                 }
-                Err(error) => {
+                Err(ExportFailure::Cancelled) => {
+                    self.dialog_error = None;
+                    self.set_status("Export cancelled", false);
+                }
+                Err(ExportFailure::Failed(error)) => {
                     self.dialog_error = Some(error.clone());
                     self.set_status(format!("Export failed — {error}"), true);
                 }
@@ -1244,11 +1329,11 @@ impl SpliceApp {
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("File", |ui| {
                         if ui.button("New project").clicked() {
-                            self.new_project();
+                            self.request(ctx, PendingAction::NewProject);
                             ui.close_menu();
                         }
                         if ui.button("New Short project").clicked() {
-                            self.new_short_project();
+                            self.request(ctx, PendingAction::NewShort);
                             ui.close_menu();
                         }
                         if ui.button("Open project…").clicked() {
@@ -1275,7 +1360,8 @@ impl SpliceApp {
                         }
                         ui.separator();
                         if ui.button("Quit").clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            self.request(ctx, PendingAction::Quit);
+                            ui.close_menu();
                         }
                     });
                     ui.menu_button("Edit", |ui| {
@@ -1404,10 +1490,10 @@ impl SpliceApp {
                     ui.add_space(8.0);
                     ui.separator();
                     if ui.button("New").clicked() {
-                        self.new_project();
+                        self.request(ctx, PendingAction::NewProject);
                     }
                     if ui.button("New Short").clicked() {
-                        self.new_short_project();
+                        self.request(ctx, PendingAction::NewShort);
                     }
                     if ui.button("Open").clicked() {
                         self.open_dialog(Dialog::Open);
@@ -2609,6 +2695,7 @@ impl SpliceApp {
             Dialog::Relink(id) => self.dialog_relink(ctx, &id),
             Dialog::Missing => self.dialog_missing(ctx),
             Dialog::About => self.dialog_about(ctx),
+            Dialog::ConfirmDiscard(action) => self.dialog_confirm_discard(ctx, action),
         }
     }
 
@@ -2656,7 +2743,7 @@ impl SpliceApp {
                     if path.as_os_str().is_empty() {
                         self.dialog_error = Some("Choose a project file".to_string());
                     } else {
-                        self.open_project(&path);
+                        self.request(ctx, PendingAction::Open(path));
                     }
                 }
             });
@@ -2784,7 +2871,7 @@ impl SpliceApp {
                     if path.as_os_str().is_empty() {
                         self.dialog_error = Some("Choose a media file to import".to_string());
                     } else {
-                        self.import_paths(vec![path]);
+                        self.import_paths(ctx, vec![path]);
                     }
                 }
             });
@@ -2881,19 +2968,30 @@ impl SpliceApp {
                 }
                 if exporting {
                     ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(
-                            RichText::new(format!(
-                                "Encoding… {:.0}s",
-                                self.export_started
-                                    .map(|started| started.elapsed().as_secs_f32())
-                                    .unwrap_or(0.0)
-                            ))
-                            .size(11.0)
-                            .color(theme::TEXT),
-                        );
-                    });
+                    let fraction = self
+                        .export_control
+                        .as_ref()
+                        .map(|control| {
+                            (control.progress_seconds() / self.export_total.max(0.1))
+                                .clamp(0.0, 1.0)
+                        })
+                        .unwrap_or(0.0);
+                    let elapsed = self
+                        .export_started
+                        .map(|started| started.elapsed().as_secs_f32())
+                        .unwrap_or(0.0);
+                    ui.add(
+                        egui::ProgressBar::new(fraction as f32)
+                            .text(format!("Encoding… {:.0}%  ·  {elapsed:.0}s", fraction * 100.0))
+                            .desired_width(f32::INFINITY),
+                    );
+                    if self
+                        .export_control
+                        .as_ref()
+                        .is_some_and(RenderControl::is_cancelled)
+                    {
+                        theme::muted(ui, "Cancelling…");
+                    }
                 }
                 ui.add_space(7.0);
                 ui.horizontal(|ui| {
@@ -2911,7 +3009,13 @@ impl SpliceApp {
                     {
                         self.start_export();
                     }
-                    if ui.button("Close").clicked() && !exporting {
+                    if exporting {
+                        if ui.button("Cancel export").clicked() {
+                            if let Some(control) = &self.export_control {
+                                control.cancel();
+                            }
+                        }
+                    } else if ui.button("Close").clicked() {
                         self.close_dialog();
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -2920,6 +3024,61 @@ impl SpliceApp {
                             "The same encoder is used by the CLI and the GUI.",
                         );
                     });
+                });
+            });
+        if !window_open {
+            self.close_dialog();
+        }
+    }
+
+    fn dialog_confirm_discard(&mut self, ctx: &egui::Context, action: PendingAction) {
+        let mut window_open = true;
+        let what = match &action {
+            PendingAction::NewProject | PendingAction::NewShort => "start a new project",
+            PendingAction::Open(_) => "open another project",
+            PendingAction::Quit => "quit",
+        };
+        egui::Window::new("Unsaved changes")
+            .open(&mut window_open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "“{}” has unsaved changes. Save them before you {what}?",
+                        self.project.name
+                    ))
+                    .size(12.0)
+                    .color(theme::TEXT),
+                );
+                if self.export_rx.is_some() && action == PendingAction::Quit {
+                    ui.add_space(4.0);
+                    theme::muted(ui, "A running export will be cancelled.");
+                }
+                if let Some(error) = &self.dialog_error {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(error).size(10.5).color(theme::DANGER));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let save = egui::Button::new(RichText::new("Save").strong().color(theme::BG))
+                        .fill(theme::ACCENT);
+                    if ui.add(save).clicked() {
+                        self.dialog_error = None;
+                        self.after_save = Some(action.clone());
+                        self.save_current(ctx);
+                    }
+                    if ui.button("Don't save").clicked() {
+                        self.dialog = Dialog::None;
+                        self.dialog_error = None;
+                        self.after_save = None;
+                        self.perform(ctx, action.clone());
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.close_dialog();
+                    }
                 });
             });
         if !window_open {
@@ -3205,13 +3364,30 @@ impl SpliceApp {
         let project_dir = self.project_dir.clone();
         let preset = self.export_preset;
         let output_label = output.display().to_string();
+        let control = RenderControl::new();
+        let worker_control = control.clone();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = export_project(&project, &project_dir, &tools, preset, &output)
-                .map_err(|error| format!("{error:#}"));
+            let result = export_project_with(
+                &project,
+                &project_dir,
+                &tools,
+                preset,
+                &output,
+                &worker_control,
+            )
+            .map_err(|error| {
+                if error.downcast_ref::<Cancelled>().is_some() {
+                    ExportFailure::Cancelled
+                } else {
+                    ExportFailure::Failed(format!("{error:#}"))
+                }
+            });
             let _ = tx.send(result);
         });
         self.export_rx = Some(rx);
+        self.export_control = Some(control);
+        self.export_total = self.duration();
         self.export_started = Some(Instant::now());
         self.dialog_error = None;
         self.set_status(

@@ -591,26 +591,39 @@ where
     Ok(stream)
 }
 
+/// Writes the WAV beside its destination and renames it into place, so a
+/// crash or full disk never leaves a truncated recording at `path`.
 fn write_wav(path: &Path, sample_rate: u32, channels: u16, samples: &[f32]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("could not create {}", parent.display()))?;
-    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("could not create {}", parent.display()))?;
     let spec = hound::WavSpec {
         channels,
         sample_rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut writer = hound::WavWriter::create(path, spec)
-        .with_context(|| format!("could not write {}", path.display()))?;
-    for sample in samples {
-        let value = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
-        writer
-            .write_sample(value)
-            .context("write microphone sample")?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("could not create a temporary file in {}", parent.display()))?;
+    {
+        let buffered = std::io::BufWriter::new(temp.as_file_mut());
+        let mut writer = hound::WavWriter::new(buffered, spec)
+            .with_context(|| format!("could not write {}", path.display()))?;
+        for sample in samples {
+            let value = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+            writer
+                .write_sample(value)
+                .context("write microphone sample")?;
+        }
+        writer.finalize().context("finalize microphone WAV")?;
     }
-    writer.finalize().context("finalize microphone WAV")?;
+    temp.as_file_mut().sync_all().context("fsync recording")?;
+    temp.persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("could not move the recording into {}", path.display()))?;
     Ok(())
 }
 
@@ -637,6 +650,24 @@ fn amplitude_dbfs(amplitude: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wav_is_written_atomically_and_reads_back() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("nested").join("take.wav");
+        let samples: Vec<f32> = (0..4800).map(|i| (i as f32 / 4800.0) - 0.5).collect();
+        write_wav(&path, 48_000, 2, &samples).expect("write");
+
+        let reader = hound::WavReader::open(&path).expect("open");
+        assert_eq!(reader.spec().channels, 2);
+        assert_eq!(reader.spec().sample_rate, 48_000);
+        assert_eq!(reader.len() as usize, samples.len());
+        let entries: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries.len(), 1, "temporary file left behind: {entries:?}");
+    }
 
     /// Hardware gate: exercises the real default output device. Kept ignored so
     /// headless machines can still run the deterministic suite; run it with

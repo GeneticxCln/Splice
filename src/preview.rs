@@ -11,8 +11,9 @@ use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 
 use crate::audio::AudioMonitor;
 use crate::ffmpeg::Toolchain;
-use crate::model::Project;
+use crate::model::{FPS, Project};
 use crate::render::{RenderOptions, render_project};
+use crate::runner::RenderControl;
 
 pub const PREVIEW_WIDTH: u32 = 960;
 pub const PREVIEW_HEIGHT: u32 = 540;
@@ -33,6 +34,70 @@ pub fn preview_dimensions(width: u32, height: u32) -> (u32, u32) {
 
 fn even_dimension(value: u32) -> u32 {
     (value.max(16) / 2) * 2
+}
+
+/// What the playback thread does with a decoded frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FramePacing {
+    /// The frame is early; hold it for this long.
+    Wait(Duration),
+    Show,
+    /// The frame is more than two frame-times late; skip it to catch up.
+    Drop,
+}
+
+fn pace_frame(elapsed: Duration, index: u64) -> FramePacing {
+    let frame_time = 1.0 / FPS as f64;
+    let due = Duration::from_secs_f64(index as f64 * frame_time);
+    if elapsed < due {
+        FramePacing::Wait(due - elapsed)
+    } else if elapsed > due + Duration::from_secs_f64(frame_time * 2.0) {
+        FramePacing::Drop
+    } else {
+        FramePacing::Show
+    }
+}
+
+/// Reads raw RGBA frames and publishes each one when its presentation time
+/// arrives. ffmpeg decodes far faster than real time, so without this the
+/// video would run to the end while the audio and playhead keep wall time.
+fn playback_loop(
+    source: &mut impl Read,
+    frame_len: usize,
+    clock: Instant,
+    stop: &AtomicBool,
+    shared: &Mutex<PlaybackShared>,
+) {
+    let mut index = 0u64;
+    let mut sequence = 0u64;
+    'frames: loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let mut pixels = vec![0u8; frame_len];
+        if source.read_exact(&mut pixels).is_err() {
+            break;
+        }
+        loop {
+            match pace_frame(clock.elapsed(), index) {
+                FramePacing::Wait(wait) => {
+                    if stop.load(Ordering::Relaxed) {
+                        break 'frames;
+                    }
+                    std::thread::sleep(wait.min(Duration::from_millis(10)));
+                }
+                FramePacing::Show => {
+                    sequence += 1;
+                    let mut shared = shared.lock().expect("playback shared");
+                    shared.frame = Some(pixels);
+                    shared.sequence = sequence;
+                    break;
+                }
+                FramePacing::Drop => break,
+            }
+        }
+        index += 1;
+    }
 }
 
 enum RenderMessage {
@@ -70,6 +135,7 @@ pub struct Preview {
     generation: u64,
     rendering: bool,
     render_rx: Option<Receiver<RenderMessage>>,
+    render_control: RenderControl,
     dirty_since: Option<Instant>,
     last_render_started: Option<Instant>,
 
@@ -108,6 +174,7 @@ impl Preview {
             generation: 0,
             rendering: false,
             render_rx: None,
+            render_control: RenderControl::new(),
             dirty_since: None,
             last_render_started: None,
             texture: None,
@@ -228,6 +295,9 @@ impl Preview {
         let width = self.frame_size.0;
         let height = self.frame_size.1;
         let ffmpeg = self.ffmpeg_path.clone();
+        // The same instant drives the playhead, so frame N is shown at
+        // `clock + N / FPS` and video cannot run ahead of the audio.
+        let clock = self.play_started;
 
         std::thread::spawn(move || {
             let mut command = Command::new(&ffmpeg);
@@ -255,20 +325,7 @@ impl Preview {
             };
             *child_slot.lock().expect("child slot") = Some(child);
             let frame_len = width as usize * height as usize * 4;
-            let mut sequence = 0u64;
-            loop {
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                let mut pixels = vec![0u8; frame_len];
-                if stdout.read_exact(&mut pixels).is_err() {
-                    break;
-                }
-                sequence += 1;
-                let mut shared = shared.lock().expect("playback shared");
-                shared.frame = Some(pixels);
-                shared.sequence = sequence;
-            }
+            playback_loop(&mut stdout, frame_len, clock, &stop, &shared);
             if let Some(mut child) = child_slot.lock().expect("child slot").take() {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -375,6 +432,8 @@ impl Preview {
             .join(format!("preview-{generation}.mp4"));
         let (tx, rx) = bounded(1);
         self.render_rx = Some(rx);
+        let control = RenderControl::new();
+        self.render_control = control.clone();
         self.rendering = true;
         self.last_render_started = Some(Instant::now());
         self.error = None;
@@ -390,6 +449,7 @@ impl Preview {
                 allow_offline: true,
                 level: "3.1".to_string(),
                 output: path.clone(),
+                control,
             };
             let message = match render_project(&project, &project_dir, &tools, &options) {
                 Ok(report) => RenderMessage::Ready {
@@ -599,6 +659,9 @@ impl Preview {
 
 impl Drop for Preview {
     fn drop(&mut self) {
+        // Stop any in-flight proxy render so ffmpeg is not left writing into
+        // the scratch directory that is about to be deleted.
+        self.render_control.cancel();
         self.stop_playback();
     }
 }
@@ -615,6 +678,55 @@ fn ffmpeg_available(tools: Option<&Toolchain>) -> Result<()> {
 mod tests {
     use super::*;
     use cpal::traits::HostTrait;
+
+    #[test]
+    fn frames_are_held_until_due_and_late_frames_are_dropped() {
+        let ms = Duration::from_millis;
+        assert_eq!(pace_frame(ms(0), 0), FramePacing::Show);
+        assert!(matches!(pace_frame(ms(0), 3), FramePacing::Wait(w) if w >= ms(99)));
+        assert_eq!(pace_frame(ms(100), 3), FramePacing::Show);
+        assert_eq!(pace_frame(ms(150), 3), FramePacing::Show);
+        assert_eq!(pace_frame(ms(200), 3), FramePacing::Drop);
+    }
+
+    /// Regression for unpaced playback: a pipe that can deliver every frame
+    /// instantly must still take roughly real time to play out.
+    #[test]
+    fn playback_loop_runs_at_real_time_not_decode_speed() {
+        let frame_len = 4 * 4 * 4;
+        let frames = 16usize;
+        let mut source = std::io::Cursor::new(vec![7u8; frame_len * frames]);
+        let stop = AtomicBool::new(false);
+        let shared = Mutex::new(PlaybackShared {
+            frame: None,
+            sequence: 0,
+        });
+        let started = Instant::now();
+        playback_loop(&mut source, frame_len, started, &stop, &shared);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(450),
+            "16 frames at 30 fps finished in {elapsed:?}"
+        );
+        let shared = shared.lock().expect("shared");
+        assert_eq!(shared.sequence, frames as u64);
+        assert!(shared.frame.is_some());
+    }
+
+    #[test]
+    fn stop_flag_ends_playback_promptly() {
+        let frame_len = 16;
+        let mut source = std::io::Cursor::new(vec![0u8; frame_len * 900]);
+        let stop = AtomicBool::new(true);
+        let shared = Mutex::new(PlaybackShared {
+            frame: None,
+            sequence: 0,
+        });
+        let started = Instant::now();
+        playback_loop(&mut source, frame_len, started, &stop, &shared);
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert_eq!(shared.lock().expect("shared").sequence, 0);
+    }
 
     #[test]
     fn proxy_dimensions_preserve_canvas_aspect() {

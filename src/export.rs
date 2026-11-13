@@ -6,6 +6,7 @@ use crate::ffmpeg::Toolchain;
 use crate::model::resolve_media_path;
 use crate::presets::ExportPreset;
 use crate::render::{RenderOptions, render_project};
+use crate::runner::RenderControl;
 
 #[derive(Debug, Clone)]
 pub struct ExportReport {
@@ -13,6 +14,7 @@ pub struct ExportReport {
     pub preset: ExportPreset,
     pub duration: f64,
     pub command: String,
+    pub graph_bytes: usize,
 }
 
 /// GUI and CLI share this function so both produce identical encodes and both
@@ -23,6 +25,27 @@ pub fn export_project(
     tools: &Toolchain,
     preset: ExportPreset,
     output: &Path,
+) -> Result<ExportReport> {
+    export_project_with(
+        project,
+        project_dir,
+        tools,
+        preset,
+        output,
+        &RenderControl::new(),
+    )
+}
+
+/// Like `export_project`, but `control` can cancel the encode (the temporary
+/// file is removed and the error downcasts to `runner::Cancelled`) and reports
+/// encoded seconds while it runs.
+pub fn export_project_with(
+    project: &crate::model::Project,
+    project_dir: &Path,
+    tools: &Toolchain,
+    preset: ExportPreset,
+    output: &Path,
+    control: &RenderControl,
 ) -> Result<ExportReport> {
     tools.require_encoders()?;
 
@@ -83,6 +106,7 @@ pub fn export_project(
         allow_offline: false,
         level: preset.level().to_string(),
         output: temp.clone(),
+        control: control.clone(),
     };
 
     let result = render_project(project, project_dir, tools, &options);
@@ -115,6 +139,7 @@ pub fn export_project(
         preset,
         duration: report.duration,
         command: report.command,
+        graph_bytes: report.graph_bytes,
     })
 }
 

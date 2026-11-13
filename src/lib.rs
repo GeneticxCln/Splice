@@ -13,6 +13,7 @@ pub mod presets;
 pub mod preview;
 pub mod project_io;
 pub mod render;
+pub mod runner;
 pub mod theme;
 pub mod timeline_ui;
 pub mod titles;

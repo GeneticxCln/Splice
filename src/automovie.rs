@@ -5,6 +5,11 @@ use crate::model::{
     AudioParams, Project, Title, Transition, TransitionKind, default_clip_for, new_id,
 };
 
+/// Clip names that mark titles AutoMovie generated, so a re-run replaces only
+/// those and never a title the user wrote with the same text.
+pub const OPENING_CLIP_NAME: &str = "Opening title (AutoMovie)";
+pub const CREDITS_CLIP_NAME: &str = "Credits (AutoMovie)";
+
 #[derive(Debug, Clone)]
 pub struct AutoMovieOptions {
     pub opening_title: bool,
@@ -44,6 +49,12 @@ pub struct AutoMovieReport {
     pub primary_duration: f64,
     pub total_duration: f64,
     pub music: Option<String>,
+}
+
+fn name_clip(project: &mut Project, id: &str, name: &str) {
+    if let Some((_, clip)) = project.clip_by_id_mut(id) {
+        clip.name = name.to_string();
+    }
 }
 
 /// Turns the current primary sequence into a Movie Maker style auto-movie:
@@ -148,10 +159,8 @@ pub fn build(project: &mut Project, options: &AutoMovieOptions) -> Result<AutoMo
     let closing_text = options.closing_text.trim().to_string();
     for track in &mut project.tracks {
         track.clips.retain(|clip| {
-            let Some(title) = &clip.title else {
-                return true;
-            };
-            !(title.text == opening_name || title.text == closing_text || title.text == "THE END")
+            !(clip.title.is_some()
+                && (clip.name == OPENING_CLIP_NAME || clip.name == CREDITS_CLIP_NAME))
         });
     }
 
@@ -159,7 +168,8 @@ pub fn build(project: &mut Project, options: &AutoMovieOptions) -> Result<AutoMo
         let mut title = Title::opening_for(&project.name, &project.settings);
         title.text = opening_name.clone();
         let duration = options.opening_duration.clamp(0.5, 15.0);
-        project.add_title(title, 0.0, duration);
+        let id = project.add_title(title, 0.0, duration);
+        name_clip(project, &id, OPENING_CLIP_NAME);
     }
 
     let primary_duration = project.primary_end();
@@ -168,7 +178,8 @@ pub fn build(project: &mut Project, options: &AutoMovieOptions) -> Result<AutoMo
         credits.text = closing_text;
         credits.subtitle = options.closing_subtitle.clone();
         let duration = options.closing_duration.clamp(0.5, 20.0);
-        project.add_title(credits, primary_duration, duration);
+        let id = project.add_title(credits, primary_duration, duration);
+        name_clip(project, &id, CREDITS_CLIP_NAME);
     }
 
     let total_duration = project.timeline_duration();
@@ -218,4 +229,59 @@ pub fn build(project: &mut Project, options: &AutoMovieOptions) -> Result<AutoMo
         total_duration,
         music: music_name,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{MediaAsset, MediaKind, Title, TitleStyle};
+
+    fn project_with_one_clip() -> Project {
+        let mut project = Project::new("My Movie");
+        project.media.push(MediaAsset {
+            id: "media-a".into(),
+            name: "a".into(),
+            path: "a.mp4".into(),
+            kind: MediaKind::Video,
+            duration: 5.0,
+            width: Some(640),
+            height: Some(360),
+            has_audio: false,
+            sample_rate: None,
+            channels: None,
+        });
+        let asset = project.media[0].clone();
+        project
+            .primary_video_track_mut()
+            .unwrap()
+            .clips
+            .push(default_clip_for(&asset, 0.0));
+        project
+    }
+
+    #[test]
+    fn rerun_keeps_user_titles_that_share_generated_text() {
+        let mut project = project_with_one_clip();
+        // A title the user wrote by hand, with text AutoMovie also uses.
+        let mut mine = Title::opening("THE END");
+        mine.style = TitleStyle::Fade;
+        let mine_id = project.add_title(mine, 1.0, 2.0);
+        let mut same_as_project = Title::opening("My Movie");
+        same_as_project.style = TitleStyle::Pop;
+        let same_id = project.add_title(same_as_project, 2.0, 2.0);
+
+        let options = AutoMovieOptions::default();
+        build(&mut project, &options).expect("first run");
+        build(&mut project, &options).expect("second run");
+
+        assert!(project.clip_by_id(&mine_id).is_some(), "user title removed");
+        assert!(project.clip_by_id(&same_id).is_some(), "user title removed");
+        let generated = project
+            .title_clips()
+            .iter()
+            .filter(|clip| clip.name == OPENING_CLIP_NAME || clip.name == CREDITS_CLIP_NAME)
+            .count();
+        assert_eq!(generated, 2, "re-run must replace, not stack");
+        assert_eq!(project.title_clips().len(), 4);
+    }
 }

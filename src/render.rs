@@ -10,6 +10,7 @@ use crate::model::{
     Clip, EffectKind, FPS, Framing, MediaAsset, MediaKind, Project, Track, TrackKind,
     TransitionKind, resolve_media_path,
 };
+use crate::runner::{self, Cancelled, RenderControl};
 use crate::titles::{escape_filter_path, write_ass};
 
 const OFFLINE_FONT_CANDIDATES: &[&str] = &[
@@ -28,6 +29,8 @@ pub struct RenderOptions {
     pub allow_offline: bool,
     pub level: String,
     pub output: PathBuf,
+    /// Cancel and progress handle for the ffmpeg run.
+    pub control: RenderControl,
 }
 
 #[derive(Debug, Clone)]
@@ -35,7 +38,13 @@ pub struct RenderReport {
     pub output: PathBuf,
     pub duration: f64,
     pub command: String,
+    /// Size of the generated filter graph; it is passed to ffmpeg by file, so
+    /// it may exceed the kernel's per-argument limit.
+    pub graph_bytes: usize,
 }
+
+/// Longest graph text echoed in an error message.
+const GRAPH_ERROR_CHARS: usize = 4000;
 
 struct InputSpec {
     path: PathBuf,
@@ -369,9 +378,13 @@ pub fn render_project(
     }
 
     let graph = filters.join(";");
+    let graph_path = temp_dir.path().join("graph.txt");
+    std::fs::write(&graph_path, &graph)
+        .with_context(|| format!("could not write filter graph {}", graph_path.display()))?;
 
     let mut command = Command::new(&tools.ffmpeg);
     command.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"]);
+    command.args(["-progress", "pipe:1", "-nostats"]);
     for input in &inputs {
         if input.image {
             command.args(["-loop", "1", "-framerate", "30"]);
@@ -387,7 +400,7 @@ pub fn render_project(
             command.arg("-i").arg(&input.path);
         }
     }
-    command.args(["-filter_complex", &graph]);
+    command.args(tools.graph_file.args(&graph_path));
     command.args(["-map", &format!("[{final_label}]")]);
     command.args(["-map", &format!("[{audio_out}]")]);
     command.args(["-t", &format!("{timeline:.3}")]);
@@ -420,18 +433,18 @@ pub fn render_project(
     command.arg(&options.output);
 
     let display = command_display(&command);
-    let output = command
-        .output()
-        .with_context(|| format!("failed to launch {}", tools.ffmpeg.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    if let Err(error) = runner::run(command, &options.control) {
         let _ = std::fs::remove_file(&options.output);
-        bail!(
-            "ffmpeg failed ({}): {}\n{}",
-            output.status,
-            stderr.trim(),
-            display
-        );
+        if error.downcast_ref::<Cancelled>().is_some() {
+            return Err(error);
+        }
+        let shown: String = graph.chars().take(GRAPH_ERROR_CHARS).collect();
+        let more = if graph.chars().count() > GRAPH_ERROR_CHARS {
+            "…"
+        } else {
+            ""
+        };
+        bail!("ffmpeg failed ({error:#})\n{display}\nfilter graph: {shown}{more}");
     }
     if !options.output.is_file() {
         bail!("ffmpeg exited successfully but produced no output file");
@@ -441,6 +454,7 @@ pub fn render_project(
         output: options.output.clone(),
         duration: timeline,
         command: display,
+        graph_bytes: graph.len(),
     })
 }
 
