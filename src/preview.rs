@@ -14,6 +14,7 @@ use crate::ffmpeg::Toolchain;
 use crate::model::{FPS, Project};
 use crate::render::{RenderOptions, render_project};
 use crate::runner::{Cancelled, RenderControl};
+use crate::window::{choose_window, project_window, window_contains};
 
 pub const PREVIEW_WIDTH: u32 = 960;
 pub const PREVIEW_HEIGHT: u32 = 540;
@@ -107,6 +108,10 @@ enum RenderMessage {
         duration: f64,
         width: u32,
         height: u32,
+        /// Timeline time of the proxy's first frame.
+        offset: f64,
+        /// The slice of the timeline the proxy holds, or `None` for all of it.
+        window: Option<(f64, f64)>,
     },
     Failed {
         generation: u64,
@@ -132,6 +137,12 @@ struct PlaybackShared {
 pub struct Preview {
     proxy: Option<PathBuf>,
     proxy_duration: f64,
+    /// Timeline time of the proxy's first frame (0 unless windowed).
+    proxy_offset: f64,
+    proxy_window: Option<(f64, f64)>,
+    /// Start playing as soon as the window around the playhead is ready.
+    resume_after_render: bool,
+    timeline_total: f64,
     temp_dir: tempfile::TempDir,
     generation: u64,
     rendering: bool,
@@ -171,6 +182,10 @@ impl Preview {
         Ok(Self {
             proxy: None,
             proxy_duration: 0.0,
+            proxy_offset: 0.0,
+            proxy_window: None,
+            resume_after_render: false,
+            timeline_total: 0.0,
             temp_dir,
             generation: 0,
             rendering: false,
@@ -219,6 +234,20 @@ impl Preview {
         self.proxy_duration
     }
 
+    /// The slice of a long timeline the current proxy covers, if windowed.
+    pub fn window(&self) -> Option<(f64, f64)> {
+        self.proxy_window
+    }
+
+    /// Position in the proxy file of a timeline time.
+    fn local(&self, time: f64) -> f64 {
+        (time - self.proxy_offset).max(0.0)
+    }
+
+    fn has_frame_for(&self, time: f64) -> bool {
+        window_contains(self.proxy_window, time, self.timeline_total)
+    }
+
     pub fn is_ready(&self) -> bool {
         self.texture.is_some() && !self.rendering
     }
@@ -257,6 +286,13 @@ impl Preview {
             if self.playhead >= timeline_duration - 0.03 {
                 self.playhead = 0.0;
             }
+            if !self.has_frame_for(self.playhead) {
+                // The proxy holds a different slice; render the right one and
+                // start playing when it arrives.
+                self.resume_after_render = true;
+                self.dirty_since = Some(Instant::now() - Duration::from_secs(1));
+                return;
+            }
             self.start_playback(timeline_duration);
         }
     }
@@ -283,7 +319,7 @@ impl Preview {
         self.stop_flag = Arc::new(AtomicBool::new(false));
         self.playback_child = Arc::new(Mutex::new(None));
 
-        match AudioMonitor::start(&self.ffmpeg_path, &proxy, self.playhead) {
+        match AudioMonitor::start(&self.ffmpeg_path, &proxy, self.local(self.playhead)) {
             Ok(monitor) => {
                 self.audio = Some(monitor);
                 self.audio_error = None;
@@ -297,7 +333,7 @@ impl Preview {
         let stop = Arc::clone(&self.stop_flag);
         let shared = Arc::clone(&self.playback_shared);
         let child_slot = Arc::clone(&self.playback_child);
-        let start = self.playhead;
+        let start = self.local(self.playhead);
         let width = self.frame_size.0;
         let height = self.frame_size.1;
         let ffmpeg = self.ffmpeg_path.clone();
@@ -369,6 +405,17 @@ impl Preview {
             self.texture = None;
             return;
         }
+        self.timeline_total = timeline_duration;
+
+        // A long timeline previews one slice at a time; render the next slice
+        // as soon as the playhead leaves the current one.
+        if self.proxy.is_some() && !self.rendering && self.dirty_since.is_none() {
+            let wanted = choose_window(self.playhead, timeline_duration);
+            let wrong_kind = wanted.is_some() != self.proxy_window.is_some();
+            if wrong_kind || !self.has_frame_for(self.playhead) {
+                self.dirty_since = Some(Instant::now() - Duration::from_secs(1));
+            }
+        }
 
         if let Some(dirty) = self.dirty_since {
             if !self.rendering
@@ -387,9 +434,16 @@ impl Preview {
 
         if self.playing {
             let elapsed = self.play_started.elapsed().as_secs_f64();
-            self.playhead = (self.play_start_time + elapsed).min(timeline_duration);
+            // Playback cannot run past the end of the current slice.
+            let limit = self
+                .proxy_window
+                .map(|(_, end)| end)
+                .unwrap_or(timeline_duration)
+                .min(timeline_duration);
+            self.playhead = (self.play_start_time + elapsed).min(limit);
+            let resume_at = self.local(self.playhead);
             if let Some(audio) = self.audio.as_mut() {
-                let rebuilt = audio.supervise(self.playhead);
+                let rebuilt = audio.supervise(resume_at);
                 if rebuilt {
                     self.audio_error = None;
                 }
@@ -398,10 +452,16 @@ impl Preview {
                 }
             }
             self.pull_playback_frame(ctx);
-            if self.playhead >= timeline_duration - 0.001 {
-                self.playhead = timeline_duration;
+            if self.playhead >= limit - 0.001 {
+                self.playhead = limit;
                 self.stop_playback();
                 self.desired_frame = Some(self.playhead);
+                if limit < timeline_duration - 0.05 {
+                    // Reached the end of a slice, not of the movie: carry on
+                    // with the next one.
+                    self.resume_after_render = true;
+                    self.dirty_since = Some(Instant::now() - Duration::from_secs(1));
+                }
             } else {
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
@@ -413,6 +473,7 @@ impl Preview {
                     .map(|loaded| (loaded - desired).abs() > 0.002)
                     .unwrap_or(true)
                     && self.frame_rx.is_none()
+                    && self.has_frame_for(desired)
                 {
                     self.start_frame_load(desired);
                 }
@@ -424,6 +485,7 @@ impl Preview {
             && !self.playing
             && self.texture.is_none()
             && self.frame_rx.is_none()
+            && self.has_frame_for(self.playhead)
         {
             self.start_frame_load(self.playhead.min(timeline_duration - 0.02).max(0.0));
         }
@@ -447,6 +509,24 @@ impl Preview {
         self.stop_playback();
 
         let (width, height) = preview_dimensions(project.settings.width, project.settings.height);
+        // Long timelines render only the slice around the playhead.
+        let mut offset = 0.0;
+        let mut min_duration = 0.0;
+        let mut window = choose_window(self.playhead, project.timeline_duration());
+        let project = match window {
+            Some((start, end)) => {
+                let sliced = project_window(&project, start, end);
+                if sliced.timeline_duration() > 0.05 {
+                    offset = start;
+                    min_duration = end - start;
+                    sliced
+                } else {
+                    window = None;
+                    project
+                }
+            }
+            None => project,
+        };
         std::thread::spawn(move || {
             let options = RenderOptions {
                 width,
@@ -456,6 +536,7 @@ impl Preview {
                 level: "3.1".to_string(),
                 output: path.clone(),
                 control,
+                min_duration,
             };
             let message = match render_project(&project, &project_dir, &tools, &options) {
                 Ok(report) => RenderMessage::Ready {
@@ -464,6 +545,8 @@ impl Preview {
                     duration: report.duration,
                     width,
                     height,
+                    offset,
+                    window,
                 },
                 Err(error) if error.downcast_ref::<Cancelled>().is_some() => {
                     RenderMessage::Cancelled
@@ -488,6 +571,8 @@ impl Preview {
                 duration,
                 width,
                 height,
+                offset,
+                window,
             }) => {
                 self.render_rx = None;
                 self.rendering = false;
@@ -501,12 +586,22 @@ impl Preview {
                     }
                 }
                 self.proxy_duration = duration;
+                self.proxy_offset = offset;
+                self.proxy_window = window;
                 self.frame_size = (width, height);
                 self.texture = None;
                 self.loaded_frame = None;
-                self.desired_frame = Some(self.playhead.min(duration.max(0.01) - 0.01));
+                let last_frame = offset + duration.max(0.01) - 0.01;
+                self.desired_frame = Some(self.playhead.min(last_frame));
                 self.frame_rx = None;
                 self.start_frame_load(self.desired_frame.unwrap_or(0.0));
+                if self.resume_after_render {
+                    self.resume_after_render = false;
+                    if self.has_frame_for(self.playhead) {
+                        let total = self.timeline_total;
+                        self.start_playback(total);
+                    }
+                }
             }
             Ok(RenderMessage::Cancelled) => {
                 self.render_rx = None;
@@ -539,6 +634,7 @@ impl Preview {
         let width = self.frame_size.0;
         let height = self.frame_size.1;
         let ffmpeg = self.ffmpeg_path.clone();
+        let seek = self.local(time);
         std::thread::spawn(move || {
             let mut command = Command::new(&ffmpeg);
             command.args([
@@ -547,7 +643,7 @@ impl Preview {
                 "error",
                 "-nostdin",
                 "-ss",
-                &format!("{time:.4}"),
+                &format!("{seek:.4}"),
                 "-i",
             ]);
             command.arg(&proxy);

@@ -450,3 +450,96 @@ fn overlay_inspector_with_placement_renders() {
         "primary clip can move to the overlay"
     );
 }
+
+fn run_until(
+    app: &mut SpliceApp,
+    ctx: &egui::Context,
+    what: &str,
+    mut done: impl FnMut(&SpliceApp) -> bool,
+) {
+    let started = Instant::now();
+    while !done(app) {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "timed out waiting for {what}"
+        );
+        idle(app, ctx);
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+
+#[test]
+fn a_long_timeline_previews_one_slice_and_follows_the_playhead() {
+    let (mut app, ctx, _) = app_with_clips(8); // 8 x 4 s = 32 s
+    if app.tools.is_none() {
+        return;
+    }
+    // Stretch the timeline past the full-render limit.
+    for clip in &mut app.project.primary_video_track_mut().unwrap().clips {
+        clip.out_point = 10.0;
+    }
+    edit::reflow_primary_ordered(&mut app.project); // 80 s
+    app.mark_edited();
+    assert!(app.duration() > crate::window::FULL_RENDER_LIMIT);
+
+    run_until(&mut app, &ctx, "the first slice", |app| {
+        app.preview.as_ref().is_some_and(|p| p.window().is_some())
+    });
+    assert_eq!(app.preview.as_ref().unwrap().window(), Some((0.0, 30.0)));
+
+    app.seek_to(50.0);
+    run_until(&mut app, &ctx, "the slice around 50 s", |app| {
+        app.preview.as_ref().unwrap().window() == Some((45.0, 75.0))
+    });
+    run_until(&mut app, &ctx, "a frame from that slice", |app| {
+        app.preview.as_ref().unwrap().texture().is_some()
+    });
+    assert!(app.preview.as_ref().unwrap().playhead > 49.9);
+
+    // Editing the project re-renders the slice at the playhead, not at zero.
+    app.project
+        .primary_video_track_mut()
+        .unwrap()
+        .clips
+        .truncate(7);
+    edit::reflow_primary_ordered(&mut app.project); // 70 s
+    app.mark_edited();
+    run_until(&mut app, &ctx, "the re-rendered slice", |app| {
+        // Near the end the slice backs up to stay 30 s long.
+        app.preview.as_ref().unwrap().window() == Some((40.0, 70.0))
+    });
+}
+
+#[test]
+fn playback_carries_on_into_the_next_slice() {
+    let (mut app, ctx, _) = app_with_clips(8);
+    if app.tools.is_none() {
+        return;
+    }
+    for clip in &mut app.project.primary_video_track_mut().unwrap().clips {
+        clip.out_point = 10.0;
+    }
+    edit::reflow_primary_ordered(&mut app.project);
+    app.mark_edited();
+    run_until(&mut app, &ctx, "the first slice", |app| {
+        app.preview.as_ref().is_some_and(|p| {
+            p.window() == Some((0.0, 30.0)) && p.texture().is_some() && !p.is_rendering()
+        })
+    });
+
+    app.seek_to(28.0);
+    idle(&mut app, &ctx);
+    let total = app.duration();
+    app.preview.as_mut().unwrap().toggle_playback(total);
+    assert!(app.preview.as_ref().unwrap().playing);
+
+    // Two seconds later the slice ends; the next one is rendered and playback
+    // resumes in it.
+    run_until(&mut app, &ctx, "playback in the second slice", |app| {
+        let preview = app.preview.as_ref().unwrap();
+        preview.playing && preview.window().is_some_and(|(start, _)| start > 0.0)
+    });
+    let preview = app.preview.as_ref().unwrap();
+    assert!(preview.playhead >= 29.9, "resumed at {}", preview.playhead);
+    assert_eq!(preview.window(), Some((25.0, 55.0)));
+}

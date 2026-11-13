@@ -32,6 +32,9 @@ pub struct RenderOptions {
     pub output: PathBuf,
     /// Cancel and progress handle for the ffmpeg run.
     pub control: RenderControl,
+    /// Render at least this many seconds even if the clips end sooner. A
+    /// preview slice uses it to keep its full length across gaps.
+    pub min_duration: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -83,7 +86,7 @@ pub fn render_project(
     options: &RenderOptions,
 ) -> Result<RenderReport> {
     tools.require_encoders()?;
-    let duration = project.timeline_duration();
+    let duration = project.timeline_duration().max(options.min_duration);
     if !duration.is_finite() || duration <= 0.01 {
         bail!("the timeline is empty; add at least one clip before exporting or previewing");
     }

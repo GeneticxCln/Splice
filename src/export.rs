@@ -107,6 +107,7 @@ pub fn export_project_with(
         level: preset.level().to_string(),
         output: temp.clone(),
         control: control.clone(),
+        min_duration: 0.0,
     };
 
     let result = render_project(project, project_dir, tools, &options);

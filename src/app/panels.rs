@@ -631,6 +631,7 @@ impl SpliceApp {
                 let canvas_aspect = self.project.settings.aspect_ratio();
                 let is_short = self.project.settings.is_short();
                 let (proxy_width, proxy_height) = preview_dimensions(canvas_width, canvas_height);
+                let window = self.preview.as_ref().and_then(|preview| preview.window());
                 let (playhead, playing, texture, rendering, diagnostic) =
                     if let Some(preview) = &self.preview {
                         (
@@ -651,6 +652,17 @@ impl SpliceApp {
                         &format!("Proxy {proxy_width}×{proxy_height}"),
                         theme::BLUE,
                     );
+                    if let Some((start, end)) = window {
+                        theme::badge(
+                            ui,
+                            &format!(
+                                "Slice {} – {}",
+                                theme::short_time(start),
+                                theme::short_time(end)
+                            ),
+                            theme::GOLD,
+                        );
+                    }
                     if is_short {
                         let (label, color) = if duration > 180.0 {
                             ("Shorts over 3:00", theme::GOLD)

@@ -551,6 +551,7 @@ fn feature_matrix_renders_all_transitions_effects_and_titles() {
         level: "3.1".into(),
         output: transition_output.clone(),
         control: Default::default(),
+        min_duration: 0.0,
     };
     let transition_report = render_project(&transitions_project, f.dir.path(), &tools, &options)
         .expect("transition matrix render");
@@ -588,6 +589,7 @@ fn feature_matrix_renders_all_transitions_effects_and_titles() {
         level: "3.1".into(),
         output: effects_output.clone(),
         control: Default::default(),
+        min_duration: 0.0,
     };
     let effects_report = render_project(&effects_project, f.dir.path(), &tools, &options)
         .expect("effect matrix render");
@@ -1035,4 +1037,63 @@ fn trimmed_clip_plays_from_its_in_point_not_from_the_file_start() {
         "output at 0.5s matches source 0.5s ({wrong:.2}) at least as well as source 2.5s ({right:.2})"
     );
     assert!(right < 12.0, "in-point frame differs too much: {right:.2}");
+}
+
+/// A preview slice must look like the same stretch of the full render, and it
+/// must keep its full length even where the timeline has a gap.
+#[test]
+fn a_preview_window_matches_the_same_stretch_of_the_full_render() {
+    let f = fixtures();
+    let tools = Toolchain::detect().expect("ffmpeg/ffprobe");
+    let mut project = empty_project();
+    let asset = import_media(&mut project, Some(f.dir.path()), &tools, &f.one).expect("import");
+    for index in 0..3 {
+        let mut clip = default_clip_for(&asset, 0.0);
+        clip.out_point = 4.0;
+        clip.start = index as f64 * 5.0; // a one second gap between clips
+        project.primary_video_track_mut().unwrap().clips.push(clip);
+    }
+    let mut title = Title::opening("Window");
+    title.size = 80.0;
+    project.add_title(title, 5.5, 3.0);
+
+    let render = |project: &Project, min_duration: f64, name: &str| {
+        let output = f.dir.path().join(name);
+        let options = RenderOptions {
+            width: 854,
+            height: 480,
+            preview: true,
+            allow_offline: false,
+            level: "3.1".into(),
+            output: output.clone(),
+            control: Default::default(),
+            min_duration,
+        };
+        let report = render_project(project, f.dir.path(), &tools, &options).expect("render");
+        (output, report.duration)
+    };
+
+    let (full, full_duration) = render(&project, 0.0, "full.mp4");
+    assert!((full_duration - 14.0).abs() < 0.05, "{full_duration}");
+
+    // Slice 8 s .. 14 s: it opens mid-clip, covers the title, and the last
+    // clip ends at 14 s.
+    let sliced = splice::window::project_window(&project, 8.0, 14.0);
+    let (window, window_duration) = render(&sliced, 6.0, "window.mp4");
+    assert!((window_duration - 6.0).abs() < 0.05, "{window_duration}");
+
+    for offset in [0.4, 2.0, 4.5] {
+        let sliced_frame = frame(&tools, &window, offset);
+        let full_frame = frame(&tools, &full, 8.0 + offset);
+        let diff = mean_abs_diff(&sliced_frame, &full_frame);
+        assert!(
+            diff < 12.0,
+            "frame {offset}s into the slice differs by {diff:.2}"
+        );
+    }
+
+    // A slice over the gap (9 s .. 10 s has no clip) still has full length.
+    let gap = splice::window::project_window(&project, 9.0, 10.0);
+    let (_, gap_duration) = render(&gap, 1.0, "gap.mp4");
+    assert!((gap_duration - 1.0).abs() < 0.05, "{gap_duration}");
 }
