@@ -110,8 +110,10 @@ jobs:
 
       - name: Verify the packages
         run: |
-          cd dist
           version="${{ steps.version.outputs.version }}"
+          # Unpack into a scratch folder so dist/ keeps only the release files.
+          work="$(mktemp -d)"
+          cd dist
           sha256sum -c SHA256SUMS
 
           echo "== deb"
@@ -129,12 +131,15 @@ jobs:
 
           echo "== AppImage"
           chmod +x "Splice-${version}-x86_64.AppImage"
-          "./Splice-${version}-x86_64.AppImage" --appimage-extract >/dev/null
-          test "$(squashfs-root/AppRun --version)" = "splice $version"
+          (cd "$work" && "$GITHUB_WORKSPACE/dist/Splice-${version}-x86_64.AppImage" --appimage-extract >/dev/null)
+          test "$("$work/squashfs-root/AppRun" --version)" = "splice $version"
 
           echo "== tarball"
-          tar -xzf "splice-v${version}-linux-x86_64.tar.gz"
-          test "$("splice-v${version}-linux-x86_64/splice" --version)" = "splice $version"
+          tar -xzf "splice-v${version}-linux-x86_64.tar.gz" -C "$work"
+          test "$("$work/splice-v${version}-linux-x86_64/splice" --version)" = "splice $version"
+
+          echo "== nothing but files in dist"
+          test -z "$(find . -mindepth 1 -type d)"
 
           echo "== PKGBUILD"
           grep -q "^pkgver=$version$" PKGBUILD
@@ -188,7 +193,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          mapfile -t files < <(find dist -maxdepth 1 -type f | sort)
+          printf 'attaching %s\n' "${files[@]}"
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
             --title "Splice $GITHUB_REF_NAME" \
             --notes-file notes.md \
             --verify-tag
