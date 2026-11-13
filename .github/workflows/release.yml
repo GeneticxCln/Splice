@@ -7,12 +7,13 @@ on:
 
 permissions:
   contents: write
+  checks: read
 
 jobs:
   release:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
@@ -25,7 +26,28 @@ jobs:
             libxi-dev \
             libxkbcommon-dev \
             libxrandr-dev
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@360a4e93673de6630fac2478bc9e35244b01a759 # 1.88.0
+      - name: Require a green CI run for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The tag and its branch commit are pushed together, so CI may still
+          # be running: wait for it instead of publishing untested code.
+          for attempt in $(seq 1 60); do
+            result="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
+              --jq '[.check_runs[] | select(.name == "test")]
+                    | if length == 0 then "missing"
+                      elif all(.status == "completed") then
+                        (if all(.conclusion == "success") then "success" else "failure" end)
+                      else "pending" end')"
+            echo "CI result for $GITHUB_SHA: $result (attempt $attempt)"
+            case "$result" in
+              success) exit 0 ;;
+              failure) echo "CI failed for this commit; not releasing"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "timed out waiting for CI"; exit 1
       - name: Verify tag matches Cargo.toml
         run: |
           version="${GITHUB_REF_NAME#v}"

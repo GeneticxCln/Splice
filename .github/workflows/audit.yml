@@ -1,0 +1,26 @@
+name: Audit
+
+on:
+  push:
+    paths:
+      - Cargo.lock
+      - .github/workflows/audit.yml
+  pull_request:
+    paths:
+      - Cargo.lock
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master (stable)
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Check dependencies for known vulnerabilities
+        run: cargo audit
