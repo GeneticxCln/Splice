@@ -704,3 +704,37 @@ syntax-checked, but nothing ran on GitHub).
 
 Gate status: PASS, with the items above unverified.
 
+
+## Slice 15 — packaging and release 1.4.1
+
+Date: 2026-11-13. Host for local checks: Linux (CachyOS), Rust 1.88.0.
+
+Local, before pushing:
+
+```text
+packaging/build-packages.sh 1.4.0 <dir>      deb, rpm, binary tarball, source tarball, PKGBUILD, SRCINFO, SHA256SUMS
+mksrcinfo.sh output vs `makepkg --printsrcinfo`   identical
+makepkg --nodeps  (PKGBUILD, local source)   package built; check() ran 77 + 12 + 9 tests, all passed
+```
+
+On GitHub (workflow runs on `main`, `GeneticxCln/Splice`):
+
+- The release workflow was first run by hand on `main` (dry run: build and
+  verify, no publish). It built and verified the deb (installed with apt and
+  run), rpm, AppImage (extracted and run), tarball and PKGBUILD.
+- The first CI run on `main` failed: `runner::tests::cancel_kills_a_long_running_child_promptly`
+  hung because CI's `sh` is dash, which does not exec the command, so a
+  grandchild kept the output pipes open. The runner now waits one second for
+  the pipes instead of joining without a limit.
+- The Audit workflow failed because the toolchain action needs an explicit
+  `toolchain`. Fixed.
+- Tag `v1.4.0` built every package but the publish step failed: the verify
+  step had unpacked archives inside `dist/` and the directories could not be
+  uploaded. No release was created for it. The tag was left in place and the
+  fix shipped as 1.4.1.
+- Tag `v1.4.1` (commit `bc8b2de`, CI, MSRV and Audit green) published the
+  release with the deb, rpm, AppImage, binary and source tarballs, `PKGBUILD`,
+  `splice-editor.SRCINFO` and `SHA256SUMS`.
+
+Not checked: the installed packages on other distributions (Fedora, Arch with a
+clean chroot), and the published `PKGBUILD` against the live release URL.
