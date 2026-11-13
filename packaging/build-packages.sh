@@ -5,7 +5,8 @@
 #   splice-editor_X-1_amd64.deb
 #   splice-editor-X-1.x86_64.rpm
 #   Splice-X-x86_64.AppImage        only when APPIMAGETOOL is set
-#   PKGBUILD, .SRCINFO              Arch Linux, checksum filled in
+#   PKGBUILD, splice-editor.SRCINFO Arch Linux, checksum filled in (rename the
+#                                   second to .SRCINFO for the AUR)
 #   SHA256SUMS
 #
 #   packaging/build-packages.sh 1.4.0 dist
@@ -63,8 +64,8 @@ sed -e "s/^pkgver=.*/pkgver=$version/" \
     -e "s/^pkgrel=.*/pkgrel=1/" \
     -e "s/^sha256sums=.*/sha256sums=('$source_sum')/" \
     packaging/arch/PKGBUILD > "$out/PKGBUILD"
-packaging/arch/mksrcinfo.sh "$out/PKGBUILD" > "$out/.SRCINFO"
+packaging/arch/mksrcinfo.sh "$out/PKGBUILD" > "$out/splice-editor.SRCINFO"
 
 echo "== checksums =="
-(cd "$out" && sha256sum -- $(ls -1 | grep -v '^SHA256SUMS$' | grep -v '^\.SRCINFO$') > SHA256SUMS)
+(cd "$out" && sha256sum -- $(ls -1 | grep -v '^SHA256SUMS$') > SHA256SUMS)
 ls -la "$out"

@@ -41,12 +41,30 @@ Projects are versioned JSON documents with the `.splice` extension.
 
 ## Install
 
+Each [release](https://github.com/GeneticxCln/Splice/releases) has:
+
+| Download | Install |
+| --- | --- |
+| `splice-editor_X.Y.Z-1_amd64.deb` | `sudo apt install ./splice-editor_X.Y.Z-1_amd64.deb` |
+| `splice-editor-X.Y.Z-1.x86_64.rpm` | `sudo dnf install ./splice-editor-X.Y.Z-1.x86_64.rpm` |
+| `Splice-X.Y.Z-x86_64.AppImage` | `chmod +x` and run |
+| `splice-vX.Y.Z-linux-x86_64.tar.gz` | unpack, then `packaging/install.sh` |
+| `PKGBUILD` | Arch Linux: put it in an empty folder and run `makepkg -si` |
+
+All of them need the system `ffmpeg` and `ffprobe` with `libx264` and `aac`
+(on Fedora, ffmpeg from RPM Fusion; `ffmpeg-free` has no libx264). The AppImage
+bundles only Splice itself. `SHA256SUMS` lists checksums for every file.
+
+From source:
+
 ```sh
 cargo build --release
 packaging/install.sh                # ~/.local, or PREFIX=/usr/local sudo packaging/install.sh
 ```
 
 This installs the binary, a desktop entry, an icon and the `.splice` MIME type.
+Maintainers: `packaging/build-packages.sh X.Y.Z dist` builds all of the above
+(needs `cargo-deb`, `cargo-generate-rpm` and, for the AppImage, `appimagetool`).
 
 ## Build and run
 

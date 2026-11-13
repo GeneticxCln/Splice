@@ -51,6 +51,13 @@
   motion expressions; integration tests for seek accuracy, oversized graphs and
   export cancellation.
 
+### Packaging
+- Releases publish a `.deb`, an `.rpm`, an AppImage, a binary tarball, a source
+  tarball, an Arch `PKGBUILD` with `.SRCINFO` and `SHA256SUMS`. The workflow
+  installs and runs each one before publishing, and can be started by hand to
+  build everything without publishing.
+- Release builds are stripped.
+
 ### Changed
 - egui/eframe 0.33 and cpal 0.18; the 1.88 MSRV is unchanged. `cargo audit`
   reports no vulnerabilities (one unmaintained transitive crate, ttf-parser).

@@ -1,33 +1,60 @@
 name: Release
 
+# Pushing a `vX.Y.Z` tag builds every package and publishes a GitHub release.
+# Running the workflow by hand builds and verifies the same packages without
+# publishing anything; the files are kept as a workflow artifact.
+
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  checks: read
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # appimagetool is only published as an AppImage; pin the exact release and
+  # its checksum so a changed download cannot slip into a release.
+  APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+  APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+  CARGO_DEB_VERSION: 3.8.0
+  CARGO_GENERATE_RPM_VERSION: 0.21.1
 
 jobs:
-  release:
+  build:
+    # Built on 22.04 so the binary runs on any newer glibc.
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Install Linux build dependencies
+
+      - name: Work out the version
+        id: version
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev \
-            libgl1-mesa-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxkbcommon-dev \
-            libxrandr-dev
-      - uses: dtolnay/rust-toolchain@360a4e93673de6630fac2478bc9e35244b01a759 # 1.88.0
+          crate_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            test "$version" = "$crate_version" || {
+              echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $crate_version"
+              exit 1
+            }
+          else
+            version="$crate_version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building $version"
+
       - name: Require a green CI run for this commit
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -48,25 +75,120 @@ jobs:
             sleep 30
           done
           echo "timed out waiting for CI"; exit 1
-      - name: Verify tag matches Cargo.toml
+
+      - name: Install build dependencies
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          crate_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
-          test "$version" = "$crate_version" || {
-            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $crate_version"
-            exit 1
-          }
-      - name: Build release binary
-        run: cargo build --release --locked
-      - name: Package release
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            desktop-file-utils \
+            rpm \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxrandr-dev
+
+      - uses: dtolnay/rust-toolchain@360a4e93673de6630fac2478bc9e35244b01a759 # 1.88.0
+
+      - name: Install packaging tools
         run: |
-          name="splice-${GITHUB_REF_NAME}-linux-x86_64"
-          mkdir -p "dist/$name"
-          cp target/release/splice README.md LICENSE CHANGELOG.md "dist/$name/"
-          cp -r packaging "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
-      - name: Publish GitHub release
+          rustup toolchain install stable --profile minimal
+          cargo +stable install cargo-deb --version "$CARGO_DEB_VERSION" --locked
+          cargo +stable install cargo-generate-rpm --version "$CARGO_GENERATE_RPM_VERSION" --locked
+          curl -fsSL -o appimagetool "$APPIMAGETOOL_URL"
+          echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c -
+          chmod +x appimagetool
+
+      - name: Build every package
+        run: |
+          APPIMAGETOOL="$PWD/appimagetool" \
+            packaging/build-packages.sh "${{ steps.version.outputs.version }}" dist
+
+      - name: Verify the packages
+        run: |
+          cd dist
+          version="${{ steps.version.outputs.version }}"
+          sha256sum -c SHA256SUMS
+
+          echo "== deb"
+          dpkg-deb --info "splice-editor_${version}-1_amd64.deb"
+          dpkg-deb --contents "splice-editor_${version}-1_amd64.deb"
+          sudo apt-get install -y "./splice-editor_${version}-1_amd64.deb"
+          test "$(splice --version)" = "splice $version"
+          desktop-file-validate /usr/share/applications/splice.desktop
+          sudo apt-get remove -y splice-editor
+
+          echo "== rpm"
+          rpm -qip "splice-editor-${version}-1.x86_64.rpm"
+          rpm -qpl "splice-editor-${version}-1.x86_64.rpm"
+          rpm -qpR "splice-editor-${version}-1.x86_64.rpm"
+
+          echo "== AppImage"
+          chmod +x "Splice-${version}-x86_64.AppImage"
+          "./Splice-${version}-x86_64.AppImage" --appimage-extract >/dev/null
+          test "$(squashfs-root/AppRun --version)" = "splice $version"
+
+          echo "== tarball"
+          tar -xzf "splice-v${version}-linux-x86_64.tar.gz"
+          test "$("splice-v${version}-linux-x86_64/splice" --version)" = "splice $version"
+
+          echo "== PKGBUILD"
+          grep -q "^pkgver=$version$" PKGBUILD
+          grep -q "^sha256sums=('[0-9a-f]\{64\}')$" PKGBUILD
+          grep -q "pkgver = $version" splice-editor.SRCINFO
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: splice-${{ steps.version.outputs.version }}-packages
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: splice-${{ needs.build.outputs.version }}-packages
+          path: dist
+
+      - name: Write the release notes
+        run: |
+          version="${{ needs.build.outputs.version }}"
+          {
+            packaging/release-notes.sh "$version"
+            echo
+            echo "## Downloads"
+            echo
+            echo "| File | For |"
+            echo "| --- | --- |"
+            echo "| \`splice-editor_${version}-1_amd64.deb\` | Debian, Ubuntu and derivatives |"
+            echo "| \`splice-editor-${version}-1.x86_64.rpm\` | Fedora, openSUSE and derivatives |"
+            echo "| \`Splice-${version}-x86_64.AppImage\` | any distribution |"
+            echo "| \`splice-v${version}-linux-x86_64.tar.gz\` | plain binary, with \`packaging/install.sh\` |"
+            echo "| \`PKGBUILD\`, \`splice-editor.SRCINFO\` | Arch Linux (\`makepkg -si\`); rename the second file to \`.SRCINFO\` for the AUR |"
+            echo "| \`Splice-${version}.tar.gz\` | source |"
+            echo "| \`SHA256SUMS\` | checksums for all of the above |"
+            echo
+            echo "Splice needs the system \`ffmpeg\` and \`ffprobe\` with the \`libx264\` and \`aac\` encoders."
+            echo "On Fedora that means ffmpeg from RPM Fusion, because \`ffmpeg-free\` has no libx264."
+          } > notes.md
+          cat notes.md
+
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 --title "Splice $GITHUB_REF_NAME" --generate-notes --verify-tag
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Splice $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --verify-tag
