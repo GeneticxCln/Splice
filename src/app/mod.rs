@@ -15,6 +15,7 @@ use crate::catalog::{self, EFFECTS, FONTS, PALETTE, TITLE_MOTIONS, TITLE_STYLES,
 use crate::edit;
 use crate::export::{ExportReport, export_project_with};
 use crate::ffmpeg::Toolchain;
+use crate::filedialog;
 use crate::history::History;
 use crate::library;
 use crate::model::{
@@ -59,6 +60,18 @@ enum Dialog {
 
 /// A project-replacing action held back while the user decides about unsaved
 /// changes.
+/// Which dialog field a native file chooser fills in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PickTarget {
+    Open,
+    SaveAs,
+    Import,
+    Export,
+    Relink,
+}
+
+type PickOutcome = std::result::Result<Vec<PathBuf>, String>;
+
 #[derive(Debug, Clone, PartialEq)]
 enum PendingAction {
     NewProject,
@@ -123,6 +136,8 @@ pub struct SpliceApp {
     export_control: Option<RenderControl>,
     export_total: f64,
     import_rx: Option<Receiver<ImportBatch>>,
+    picker: Option<filedialog::Backend>,
+    pick_rx: Option<(Receiver<PickOutcome>, PickTarget)>,
     last_autosave: Instant,
     /// An autosave from a previous session is waiting for a decision, so new
     /// autosaves must not overwrite it.
@@ -214,6 +229,8 @@ impl SpliceApp {
             export_control: None,
             export_total: 0.0,
             import_rx: None,
+            picker: filedialog::detect(),
+            pick_rx: None,
             last_autosave: Instant::now(),
             recovery_unresolved: false,
             after_save: None,
@@ -745,6 +762,104 @@ impl SpliceApp {
         self.set_status(format!("Importing {count} file(s)…"), false);
     }
 
+    fn start_pick(&mut self, target: PickTarget) {
+        let Some(backend) = self.picker else {
+            return;
+        };
+        if self.pick_rx.is_some() {
+            return;
+        }
+        let project_filter = (
+            "Splice projects".to_string(),
+            vec![crate::model::PROJECT_EXTENSION.to_string()],
+        );
+        let media_filter = (
+            "Media".to_string(),
+            [
+                "mp4", "mov", "mkv", "webm", "avi", "m4v", "png", "jpg", "jpeg", "webp", "wav",
+                "mp3", "flac", "ogg", "m4a", "aac",
+            ]
+            .iter()
+            .map(|ext| ext.to_string())
+            .collect(),
+        );
+        let movie_filter = ("MP4 movie".to_string(), vec!["mp4".to_string()]);
+        let existing = |text: &str| {
+            let path = PathBuf::from(text.trim());
+            if path.as_os_str().is_empty() {
+                self.project_dir.clone()
+            } else {
+                path
+            }
+        };
+        let request = match target {
+            PickTarget::Open => filedialog::Request {
+                mode: filedialog::Mode::Open,
+                title: "Open project".into(),
+                start: existing(&self.open_path),
+                filters: vec![project_filter],
+            },
+            PickTarget::SaveAs => filedialog::Request {
+                mode: filedialog::Mode::Save,
+                title: "Save project".into(),
+                start: existing(&self.save_path),
+                filters: vec![project_filter],
+            },
+            PickTarget::Import => filedialog::Request {
+                mode: filedialog::Mode::OpenMany,
+                title: "Import media".into(),
+                start: existing(&self.import_path),
+                filters: vec![media_filter],
+            },
+            PickTarget::Export => filedialog::Request {
+                mode: filedialog::Mode::Save,
+                title: "Export movie".into(),
+                start: existing(&self.export_path),
+                filters: vec![movie_filter],
+            },
+            PickTarget::Relink => filedialog::Request {
+                mode: filedialog::Mode::Open,
+                title: "Relink media".into(),
+                start: existing(&self.relink_path),
+                filters: vec![media_filter],
+            },
+        };
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(filedialog::pick(backend, &request).map_err(|e| format!("{e:#}")));
+        });
+        self.pick_rx = Some((rx, target));
+    }
+
+    fn poll_pick(&mut self, ctx: &egui::Context) {
+        let Some((rx, target)) = &self.pick_rx else {
+            return;
+        };
+        let target = *target;
+        let outcome = match rx.try_recv() {
+            Ok(outcome) => outcome,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("file chooser stopped unexpectedly".into()),
+        };
+        self.pick_rx = None;
+        let paths = match outcome {
+            Ok(paths) if paths.is_empty() => return, // cancelled
+            Ok(paths) => paths,
+            Err(error) => {
+                self.dialog_error = Some(error);
+                return;
+            }
+        };
+        let first = paths[0].display().to_string();
+        match target {
+            PickTarget::Open => self.open_path = first,
+            PickTarget::SaveAs => self.save_path = first,
+            PickTarget::Export => self.export_path = first,
+            PickTarget::Relink => self.relink_path = first,
+            PickTarget::Import => self.import_paths(ctx, paths),
+        }
+    }
+
     fn poll_import(&mut self) {
         let Some(rx) = &self.import_rx else {
             return;
@@ -1191,6 +1306,7 @@ impl SpliceApp {
         self.handle_events(ctx);
         self.poll_export();
         self.poll_import();
+        self.poll_pick(ctx);
         self.autosave_tick();
         self.handle_shortcuts(ctx);
 
@@ -1362,6 +1478,7 @@ impl SpliceApp {
             }
         }
         needs_repaint |= self.export_rx.is_some() || self.import_rx.is_some();
+        needs_repaint |= self.pick_rx.is_some();
         needs_repaint |= self.voice.is_some();
         needs_repaint |= self.screenshot_path.is_some() && !self.screenshot_saved;
         if needs_repaint {

@@ -2,6 +2,26 @@ use super::editors::*;
 use super::*;
 
 impl SpliceApp {
+    /// A "Browse…" button for the field above, shown only when a native file
+    /// chooser (zenity or kdialog) is installed.
+    pub(super) fn browse_row(&mut self, ui: &mut Ui, target: PickTarget) {
+        if self.picker.is_none() {
+            return;
+        }
+        let busy = self.pick_rx.is_some();
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!busy, egui::Button::new("Browse…"))
+                .clicked()
+            {
+                self.start_pick(target);
+            }
+            if busy {
+                ui.spinner();
+            }
+        });
+    }
+
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         let dialog = self.dialog.clone();
         match dialog {
@@ -40,6 +60,7 @@ impl SpliceApp {
                         .desired_width(f32::INFINITY)
                         .hint_text("/path/to/movie.splice"),
                 );
+                self.browse_row(ui, PickTarget::Open);
                 let mut open_clicked = false;
                 if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
                     open_clicked = true;
@@ -93,6 +114,7 @@ impl SpliceApp {
                         .desired_width(f32::INFINITY)
                         .hint_text("/path/to/movie.splice"),
                 );
+                self.browse_row(ui, PickTarget::SaveAs);
                 let mut save_clicked = false;
                 if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
                     save_clicked = true;
@@ -146,6 +168,7 @@ impl SpliceApp {
                         .desired_width(f32::INFINITY)
                         .hint_text("/path/to/clip.mp4, photo.jpg or music.wav"),
                 );
+                self.browse_row(ui, PickTarget::Import);
                 let mut import_clicked = false;
                 if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
                     import_clicked = true;
@@ -249,6 +272,7 @@ impl SpliceApp {
                         .desired_width(f32::INFINITY)
                         .hint_text("/path/to/movie.mp4"),
                 );
+                self.browse_row(ui, PickTarget::Export);
                 ui.add_space(5.0);
                 ui.horizontal_wrapped(|ui| {
                     theme::badge(ui, "H.264 High", theme::BLUE);
@@ -542,6 +566,7 @@ impl SpliceApp {
                         .desired_width(f32::INFINITY)
                         .hint_text("/new/path/to/source"),
                 );
+                self.browse_row(ui, PickTarget::Relink);
                 theme::muted(
                     ui,
                     "The replacement is validated with ffprobe before the project is changed.",

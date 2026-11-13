@@ -358,3 +358,72 @@ fn every_dialog_and_a_busy_project_render_without_panicking() {
     app.selected_clip = Some(title_id);
     idle(&mut app, &ctx);
 }
+
+#[test]
+fn chosen_files_fill_the_matching_dialog_field() {
+    let (mut app, ctx) = new_app();
+    let send = |app: &mut SpliceApp, target, outcome: PickOutcome| {
+        let (tx, rx) = mpsc::channel();
+        tx.send(outcome).unwrap();
+        app.pick_rx = Some((rx, target));
+    };
+
+    send(
+        &mut app,
+        PickTarget::Open,
+        Ok(vec![PathBuf::from("/m/a.splice")]),
+    );
+    app.poll_pick(&ctx);
+    assert_eq!(app.open_path, "/m/a.splice");
+    assert!(app.pick_rx.is_none());
+
+    send(
+        &mut app,
+        PickTarget::SaveAs,
+        Ok(vec![PathBuf::from("/m/b.splice")]),
+    );
+    app.poll_pick(&ctx);
+    assert_eq!(app.save_path, "/m/b.splice");
+
+    send(
+        &mut app,
+        PickTarget::Export,
+        Ok(vec![PathBuf::from("/m/c.mp4")]),
+    );
+    app.poll_pick(&ctx);
+    assert_eq!(app.export_path, "/m/c.mp4");
+
+    send(
+        &mut app,
+        PickTarget::Relink,
+        Ok(vec![PathBuf::from("/m/d.mp4")]),
+    );
+    app.poll_pick(&ctx);
+    assert_eq!(app.relink_path, "/m/d.mp4");
+
+    // Cancelling leaves the field alone.
+    send(&mut app, PickTarget::Open, Ok(Vec::new()));
+    app.poll_pick(&ctx);
+    assert_eq!(app.open_path, "/m/a.splice");
+
+    send(&mut app, PickTarget::Open, Err("chooser exploded".into()));
+    app.poll_pick(&ctx);
+    assert_eq!(app.dialog_error.as_deref(), Some("chooser exploded"));
+}
+
+#[test]
+fn browse_buttons_render_in_every_path_dialog() {
+    let (mut app, ctx) = new_app();
+    app.picker = Some(filedialog::Backend::Zenity);
+    for dialog in [
+        Dialog::Open,
+        Dialog::SaveAs,
+        Dialog::Import,
+        Dialog::Export,
+        Dialog::Relink("missing".into()),
+    ] {
+        app.open_dialog(dialog);
+        idle(&mut app, &ctx);
+        app.close_dialog();
+    }
+}

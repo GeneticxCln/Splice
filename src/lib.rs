@@ -6,6 +6,7 @@ pub mod catalog;
 pub mod edit;
 pub mod export;
 pub mod ffmpeg;
+pub mod filedialog;
 pub mod filters;
 pub mod history;
 pub mod library;
