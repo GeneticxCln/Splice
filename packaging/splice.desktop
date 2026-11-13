@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Splice
+GenericName=Video Editor
+Comment=Timeline video editor
+Exec=splice %f
+Icon=splice
+Terminal=false
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=application/x-splice-project;
+StartupWMClass=splice
+Keywords=video;editor;timeline;movie;shorts;

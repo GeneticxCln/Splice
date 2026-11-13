@@ -40,7 +40,8 @@ jobs:
         run: |
           name="splice-${GITHUB_REF_NAME}-linux-x86_64"
           mkdir -p "dist/$name"
-          cp target/release/splice README.md LICENSE "dist/$name/"
+          cp target/release/splice README.md LICENSE CHANGELOG.md "dist/$name/"
+          cp -r packaging "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
       - name: Publish GitHub release

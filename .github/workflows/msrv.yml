@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: msrv-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   msrv:
     runs-on: ubuntu-latest

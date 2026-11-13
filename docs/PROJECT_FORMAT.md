@@ -28,7 +28,7 @@ format is versioned so a future schema can migrate instead of guessing.
 | `format` | Always `splice-project`. Any other value is rejected. |
 | `version` | Integer schema version. This build writes `1`. Files with a newer version are rejected with a clear error; version `0` is rejected because no migration exists. |
 | `name` | Project name shown in the title bar. |
-| `settings` | Canvas size, frame rate, sample rate, preview letterbox colour, and visual framing. |
+| `settings` | Canvas size, preview letterbox colour, and visual framing. `fps` and `sample_rate` are stored but the renderer always uses 30 fps and 48 kHz. |
 | `media` | Probed source assets. Sources are referenced, never copied or rewritten. |
 | `tracks` | Ordered video/overlay/audio tracks containing clips. |
 
@@ -125,7 +125,9 @@ A project has four default tracks: `Video 1` (primary), `Overlay`, `Music`, and
   clip. Rotation and opacity are composited as RGBA before the clip is returned
   to the normal YUV timeline; primary clips fade/rotate over the project
   background, while overlay clips keep their alpha for the multi-track overlay.
-- Title clips have `"media_id": null` and a `title` object:
+- Title clips have `"media_id": null` and a `title` object. They belong on the
+  Overlay track; a title on the primary Video track is rejected on save and
+  load:
 
 ```json
 {
@@ -213,3 +215,11 @@ version.
 matches the original version 1 behaviour. `fill` scales visual clips to cover
 the canvas and center-crops them. New 9:16 Short projects use `fill`; landscape
 projects continue to use `fit`. No schema migration is required.
+
+## Autosave
+
+While a saved project has unsaved edits, Splice writes a working copy every 30
+seconds to a hidden file beside it, `.<name>.autosave.splice`, using the same
+atomic save. It is deleted on save, quit and discard. If one is newer than the
+project file when the project is opened, Splice offers to recover it. A project
+that has never been saved has no folder to autosave into and is not covered.

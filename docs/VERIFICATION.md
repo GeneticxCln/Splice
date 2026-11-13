@@ -615,3 +615,45 @@ The extracted frame at 2.5 s shows `Splice Demo Reel` as two wrapped lines and
 the subtitle inside the safe column, so the preview and export paths agree.
 
 Gate status: PASS.
+
+## Slice 13 — analysis follow-up, release 1.4.0
+
+Date: 2026-11-13. Host: Linux (CachyOS), Rust 1.88.0, ffmpeg n9.0.2.
+
+Phase 1 to 4 work from the project analysis. Commands and results:
+
+```text
+cargo fmt --check                                      exit 0
+cargo clippy --all-targets --locked -- -D warnings     exit 0
+bash scripts/check-msrv.sh   (Rust 1.88.0)             exit 0
+cargo test --locked
+  unittests src/lib.rs        45 passed; 3 ignored (hardware audio)
+  tests/full_suite.rs         11 passed
+  tests/render_smoke.rs        7 passed
+cargo build --release --locked                         exit 0
+PREFIX=<scratch> packaging/install.sh                  exit 0; `splice --version` -> splice 1.4.0
+desktop-file-validate packaging/splice.desktop         no output
+xmllint --noout packaging/splice.svg packaging/splice-project.xml   no output
+splice --screenshot <png> --exit-after-screenshot      SCREENSHOT_OK, exit 0
+```
+
+Regression coverage added for each behavioural fix:
+
+| Fix | Test |
+| --- | --- |
+| Paced preview | `preview::tests::playback_loop_runs_at_real_time_not_decode_speed` |
+| Cancel and progress | `runner::tests::*`, `export_cancel_stops_ffmpeg_and_leaves_no_files` |
+| Graph over 128 KiB | `filter_graph_larger_than_the_argv_limit_still_renders` |
+| Expression nesting | `motion::tests::expression_nesting_stays_logarithmic_in_keyframe_count` |
+| Input seeking | `trimmed_clip_plays_from_its_in_point_not_from_the_file_start` |
+| Autosave | `autosave::tests::autosave_round_trips_and_only_newer_files_trigger_recovery` |
+| AutoMovie titles | `automovie::tests::rerun_keeps_user_titles_that_share_generated_text` |
+| Font injection | `titles::tests::font_names_cannot_inject_extra_ass_lines` |
+
+Not exercised here: the GUI dialogs (unsaved changes, recovery, export cancel)
+and live playback were not driven by hand, only compiled and started; the
+`-filter_complex_script` fallback for ffmpeg 6 and early 7 has no local ffmpeg
+to run against; the three hardware audio tests were not re-run.
+
+Gate status: PASS, with the items above unverified.
+

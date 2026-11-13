@@ -77,4 +77,14 @@ portrait canvases, so existing landscape title output is unchanged.
 `Export Movie` groups landscape and Shorts presets and calls the same
 `export_project` function used by the CLI on a background thread, reporting
 `Exported …` or the exact error in the dialog and status bar. The Export button
-is enabled only while ffmpeg is detected.
+is enabled only while ffmpeg is detected. A progress bar shows encoded time
+against the timeline length, and Cancel Export stops ffmpeg and removes the
+temporary file; no partial output is left either way.
+
+## How the encode is driven
+
+The filter graph is written to a temporary file and loaded with
+`-/filter_complex` (ffmpeg 7 and later) or `-filter_complex_script` (older),
+because a large graph exceeds the 128 KiB Linux limit for one argument. Each
+source is opened with `-ss`/`-t` at the clip's window and read with
+`-protocol_whitelist file`.

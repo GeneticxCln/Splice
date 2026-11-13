@@ -19,7 +19,8 @@ Projects are versioned JSON documents with the `.splice` extension.
 - AutoMovie titles, crossfades, credits, and optional music.
 - Proxy preview with audio monitoring; output recovers after device errors.
 - Voiceover recording, media relinking, and offline-media validation.
-- Atomic saves and a versioned project format.
+- Atomic saves, autosave with crash recovery, and a versioned project format.
+- Export progress with cancel; a prompt before unsaved changes are discarded.
 - Landscape and 9:16 Shorts presets for YouTube Shorts and TikTok.
 - 1080p, 720p, and 480p H.264/AAC presets shared by the GUI and CLI.
 - Shorts mode with fill/fit framing, safe-area guides, and automatic title
@@ -33,6 +34,15 @@ Projects are versioned JSON documents with the `.splice` extension.
 - DejaVu fonts for the default UI and title look. Other installed fonts can be
   selected.
 - A default audio input and output for voiceover and preview monitoring.
+
+## Install
+
+```sh
+cargo build --release
+packaging/install.sh                # ~/.local, or PREFIX=/usr/local sudo packaging/install.sh
+```
+
+This installs the binary, a desktop entry, an icon and the `.splice` MIME type.
 
 ## Build and run
 
@@ -57,6 +67,18 @@ splice voicecheck --seconds 4 --output voice.wav
 Export returns `0` only after a complete file is written. Missing media, empty
 timelines, invalid output paths, and source-overwrite attempts fail without
 partial output.
+
+## Known limitations
+
+- Frame rate (30 fps) and audio (48 kHz stereo) are fixed; `settings.fps` and
+  `settings.sample_rate` are stored but not applied.
+- Overlay clips fill the whole canvas; there is no picture-in-picture
+  positioning or scaling below 100%, and clips cannot move between tracks.
+- Every edit re-renders the whole preview proxy (after a short delay). Long
+  timelines preview slowly; export is unaffected.
+- File dialogs are typed paths; there is no native file picker.
+- Project `fps` and `sample_rate` in a hand-edited file are ignored.
+- Linux only, x86_64 release builds.
 
 ## Demo
 
@@ -85,6 +107,7 @@ Audio tests marked ignored require a default output device.
 - [Project format](docs/PROJECT_FORMAT.md)
 - [Export presets](docs/EXPORT_PRESETS.md)
 - [Verification log](docs/VERIFICATION.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 

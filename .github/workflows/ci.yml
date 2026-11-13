@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -26,6 +30,8 @@ jobs:
             libxi-dev \
             libxkbcommon-dev \
             libxrandr-dev
+      - name: Show ffmpeg version
+        run: ffmpeg -version | head -n 1
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy
@@ -34,4 +40,4 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
-        run: cargo test --locked
+        run: cargo test --locked --no-fail-fast
