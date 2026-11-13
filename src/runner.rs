@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -42,6 +42,9 @@ impl RenderControl {
 
 const STDERR_TAIL: usize = 64 * 1024;
 
+/// How long to wait for the output pipes to drain once the child is gone.
+const PIPE_DRAIN_WAIT: Duration = Duration::from_secs(1);
+
 /// Runs `command` to completion while honouring `control`. ffmpeg must have
 /// been given `-progress pipe:1` for progress to be reported. Returns the
 /// tail of stderr on success; on failure the error carries the exit status and
@@ -63,7 +66,8 @@ pub fn run(mut command: Command, control: &RenderControl) -> Result<String> {
     let mut stderr = child.stderr.take().context("child has no stderr pipe")?;
 
     let progress = Arc::clone(&control.progress_us);
-    let progress_thread = std::thread::spawn(move || {
+    let (progress_done_tx, progress_done) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(|line| line.ok()) {
             if let Some(value) = line.strip_prefix("out_time_us=") {
                 if let Ok(micros) = value.trim().parse::<i64>() {
@@ -71,10 +75,12 @@ pub fn run(mut command: Command, control: &RenderControl) -> Result<String> {
                 }
             }
         }
+        let _ = progress_done_tx.send(());
     });
     // Drain stderr continuously so a chatty child can never block on a full
     // pipe, but keep only the tail.
-    let stderr_thread = std::thread::spawn(move || {
+    let (stderr_tx, stderr_done) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
         let mut tail: Vec<u8> = Vec::new();
         let mut chunk = [0u8; 8192];
         while let Ok(read) = stderr.read(&mut chunk) {
@@ -86,7 +92,7 @@ pub fn run(mut command: Command, control: &RenderControl) -> Result<String> {
                 tail.drain(..tail.len() - STDERR_TAIL);
             }
         }
-        String::from_utf8_lossy(&tail).into_owned()
+        let _ = stderr_tx.send(String::from_utf8_lossy(&tail).into_owned());
     });
 
     let outcome = loop {
@@ -106,8 +112,14 @@ pub fn run(mut command: Command, control: &RenderControl) -> Result<String> {
         }
     };
 
-    let _ = progress_thread.join();
-    let stderr_text = stderr_thread.join().unwrap_or_default();
+    // Normally both pipes close when the child exits. A grandchild that
+    // inherited them (a shell that did not exec its command) can keep them
+    // open, so wait only briefly and let the reader threads finish on their
+    // own rather than hanging a cancel for as long as that process lives.
+    let _ = progress_done.recv_timeout(PIPE_DRAIN_WAIT);
+    let stderr_text = stderr_done
+        .recv_timeout(PIPE_DRAIN_WAIT)
+        .unwrap_or_default();
 
     match outcome {
         None => Err(Cancelled.into()),
@@ -155,7 +167,10 @@ mod tests {
             remote.cancel();
         });
         let started = Instant::now();
-        let error = run(shell("sleep 30"), &control).expect_err("must be cancelled");
+        // `;` keeps sh from exec'ing sleep, so killing sh leaves sleep alive
+        // and holding the pipes open: cancel must not wait for it.
+        let error =
+            run(shell("sleep 30; echo unreachable"), &control).expect_err("must be cancelled");
         canceller.join().expect("canceller");
         assert!(error.downcast_ref::<Cancelled>().is_some(), "{error:#}");
         assert!(started.elapsed() < Duration::from_secs(5));
