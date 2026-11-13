@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.4.0
+## 1.4.1
+
+The `v1.4.0` tag was pushed but its release build failed while attaching the
+files, so 1.4.0 was never published. 1.4.1 is the same code with the release
+workflow fixed, and contains everything below.
 
 ### Fixed
 - Preview playback is paced to the playhead clock. Video previously decoded at

@@ -3,7 +3,7 @@
 # The release workflow publishes this file with the real checksum filled in.
 # Built from the source tarball attached to the GitHub release.
 pkgname=splice-editor
-pkgver=1.4.0
+pkgver=1.4.1
 pkgrel=1
 pkgdesc='Native Linux timeline video editor built on ffmpeg'
 arch=('x86_64')
