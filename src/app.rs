@@ -10,6 +10,7 @@ use eframe::egui::{
 
 use crate::audio::{Recorder, RecordingStats};
 use crate::automovie::{self, AutoMovieOptions};
+use crate::autosave;
 use crate::catalog::{self, EFFECTS, FONTS, PALETTE, TITLE_MOTIONS, TITLE_STYLES, TRANSITIONS};
 use crate::edit;
 use crate::export::{ExportReport, export_project_with};
@@ -19,7 +20,7 @@ use crate::library;
 use crate::model::{
     AudioParams, ClipMotion, Framing, MediaAsset, MediaKind, MotionDirection, MotionEasing,
     Project, Settings, Title, TitleMotion, TitleMotionPreset, TrackKind, Transition, new_id,
-    resolve_media_path,
+    resolve_media_path, stored_media_path,
 };
 use crate::presets::ExportPreset;
 use crate::preview::{Preview, preview_dimensions};
@@ -52,6 +53,8 @@ enum Dialog {
     About,
     /// Asks what to do with unsaved changes before running the action.
     ConfirmDiscard(PendingAction),
+    /// An autosave newer than the project file was found.
+    Recover(PathBuf),
 }
 
 /// A project-replacing action held back while the user decides about unsaved
@@ -67,6 +70,13 @@ enum PendingAction {
 struct VoiceSession {
     recorder: Recorder,
     start_time: f64,
+}
+
+/// Result of probing a batch of dropped or chosen files on a worker thread.
+#[derive(Default)]
+struct ImportBatch {
+    assets: Vec<MediaAsset>,
+    errors: Vec<String>,
 }
 
 enum ExportFailure {
@@ -112,6 +122,11 @@ pub struct SpliceApp {
     export_started: Option<Instant>,
     export_control: Option<RenderControl>,
     export_total: f64,
+    import_rx: Option<Receiver<ImportBatch>>,
+    last_autosave: Instant,
+    /// An autosave from a previous session is waiting for a decision, so new
+    /// autosaves must not overwrite it.
+    recovery_unresolved: bool,
     after_save: Option<PendingAction>,
     close_confirmed: bool,
 
@@ -192,6 +207,9 @@ impl SpliceApp {
             export_started: None,
             export_control: None,
             export_total: 0.0,
+            import_rx: None,
+            last_autosave: Instant::now(),
+            recovery_unresolved: false,
             after_save: None,
             close_confirmed: false,
             automovie: AutoMovieOptions::default(),
@@ -243,6 +261,7 @@ impl SpliceApp {
             });
         app.title_draft = Title::opening_for(&app.project.name, &app.project.settings);
 
+        app.check_recovery();
         match Preview::new() {
             Ok(mut preview) => {
                 preview.invalidate();
@@ -479,7 +498,64 @@ impl SpliceApp {
         }
     }
 
+    /// Offers to restore an autosave that is newer than the project file.
+    fn check_recovery(&mut self) {
+        if let Some(recovery) = self
+            .project_path
+            .as_deref()
+            .and_then(autosave::pending_recovery)
+        {
+            self.dialog = Dialog::Recover(recovery);
+            self.recovery_unresolved = true;
+        } else {
+            self.recovery_unresolved = false;
+        }
+    }
+
+    fn clear_autosave(&mut self) {
+        if let Some(path) = &self.project_path {
+            autosave::clear(path);
+        }
+    }
+
+    /// Writes the working copy of a saved, edited project every few seconds.
+    /// Unsaved new projects have no folder to put it in and are skipped.
+    fn autosave_tick(&mut self) {
+        if !self.dirty
+            || self.recovery_unresolved
+            || self.export_rx.is_some()
+            || self.last_autosave.elapsed() < Duration::from_secs(autosave::AUTOSAVE_INTERVAL_SECS)
+        {
+            return;
+        }
+        self.last_autosave = Instant::now();
+        if let Some(path) = self.project_path.clone() {
+            if let Err(error) = autosave::write_autosave(&path, &self.project, &self.project_dir) {
+                self.set_status(format!("Autosave failed — {error:#}"), true);
+            }
+        }
+    }
+
+    fn recover_from(&mut self, recovery: &Path) {
+        match load_project(recovery) {
+            Ok(loaded) => {
+                self.push_undo();
+                self.project = loaded.project;
+                self.selected_clip = None;
+                self.dialog = Dialog::None;
+                self.recovery_unresolved = false;
+                self.mark_edited();
+                self.set_status("Recovered unsaved edits from the autosave", false);
+            }
+            Err(error) => {
+                self.dialog_error = Some(format!("{error:#}"));
+            }
+        }
+    }
+
     fn perform(&mut self, ctx: &egui::Context, action: PendingAction) {
+        // Moving on from this project: its autosave is no longer wanted.
+        self.clear_autosave();
         match action {
             PendingAction::NewProject => self.new_project(),
             PendingAction::NewShort => self.new_short_project(),
@@ -531,6 +607,8 @@ impl SpliceApp {
                 self.open_path = absolute.display().to_string();
                 self.dirty = false;
                 self.history.break_coalescing();
+                autosave::clear(&absolute);
+                self.recovery_unresolved = false;
                 self.refresh_missing();
                 self.set_status(format!("Saved project · {}", absolute.display()), false);
                 self.dialog = Dialog::None;
@@ -549,6 +627,7 @@ impl SpliceApp {
     fn open_project(&mut self, path: &Path) {
         match load_project(path) {
             Ok(loaded) => {
+                self.import_rx = None;
                 self.project = loaded.project;
                 self.export_preset = ExportPreset::matching(&self.project.settings);
                 self.title_draft = Title::opening_for(&self.project.name, &self.project.settings);
@@ -583,6 +662,7 @@ impl SpliceApp {
                 );
                 self.dialog = Dialog::None;
                 self.dialog_error = None;
+                self.check_recovery();
             }
             Err(error) => {
                 self.dialog_error = Some(format!("{error:#}"));
@@ -600,6 +680,7 @@ impl SpliceApp {
     }
 
     fn reset_project(&mut self, project: Project, status: &str) {
+        self.import_rx = None;
         self.project = project;
         self.project_path = None;
         self.project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -636,24 +717,52 @@ impl SpliceApp {
             self.set_status("ffprobe is required to import media", true);
             return;
         };
-        self.push_undo();
-        let mut imported = 0usize;
-        let mut errors = Vec::new();
-        for path in paths {
-            match library::import_media(
-                &mut self.project,
-                Some(self.project_dir.as_path()),
-                &tools,
-                &path,
-            ) {
-                Ok(asset) => {
-                    imported += 1;
-                    self.selected_media = Some(asset.id);
-                }
-                Err(error) => errors.push(format!("{}: {error:#}", path.display())),
-            }
+        if self.import_rx.is_some() {
+            self.set_status("An import is already running — wait for it to finish", true);
+            return;
         }
+        // Probing shells out to ffprobe, which can be slow on large or remote
+        // files, so it runs off the UI thread.
+        let count = paths.len();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut batch = ImportBatch::default();
+            for path in paths {
+                match library::probe_asset(None, &tools, &path) {
+                    Ok(asset) => batch.assets.push(asset),
+                    Err(error) => batch.errors.push(format!("{}: {error:#}", path.display())),
+                }
+            }
+            let _ = tx.send(batch);
+        });
+        self.import_rx = Some(rx);
+        self.set_status(format!("Importing {count} file(s)…"), false);
+    }
+
+    fn poll_import(&mut self) {
+        let Some(rx) = &self.import_rx else {
+            return;
+        };
+        let batch = match rx.try_recv() {
+            Ok(batch) => batch,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => ImportBatch {
+                assets: Vec::new(),
+                errors: vec!["import worker stopped unexpectedly".to_string()],
+            },
+        };
+        self.import_rx = None;
+
+        let imported = batch.assets.len();
         if imported > 0 {
+            self.push_undo();
+            for mut asset in batch.assets {
+                // Stored relative to the project folder as it is now, which
+                // may differ from where the import started.
+                asset.path = stored_media_path(&self.project_dir, Path::new(&asset.path));
+                self.selected_media = Some(asset.id.clone());
+                self.project.media.push(asset);
+            }
             self.mark_edited();
             self.set_status(
                 format!(
@@ -663,10 +772,13 @@ impl SpliceApp {
                 false,
             );
         }
-        if !errors.is_empty() {
-            self.set_status(format!("Import failed — {}", errors.join(" · ")), true);
+        if !batch.errors.is_empty() {
+            self.set_status(
+                format!("Import failed — {}", batch.errors.join(" · ")),
+                true,
+            );
             if self.dialog == Dialog::Import {
-                self.dialog_error = Some(errors.join("\n"));
+                self.dialog_error = Some(batch.errors.join("\n"));
             }
         } else if self.dialog == Dialog::Import {
             self.dialog = Dialog::None;
@@ -1065,6 +1177,8 @@ impl eframe::App for SpliceApp {
         }
         self.handle_events(ctx);
         self.poll_export();
+        self.poll_import();
+        self.autosave_tick();
         self.handle_shortcuts(ctx);
 
         let duration = self.duration();
@@ -1234,7 +1348,7 @@ impl SpliceApp {
                     preview.is_rendering() || preview.playing || preview.finish_render_hint();
             }
         }
-        needs_repaint |= self.export_rx.is_some();
+        needs_repaint |= self.export_rx.is_some() || self.import_rx.is_some();
         needs_repaint |= self.voice.is_some();
         needs_repaint |= self.screenshot_path.is_some() && !self.screenshot_saved;
         if needs_repaint {
@@ -2066,7 +2180,7 @@ impl SpliceApp {
                     egui::Align2::RIGHT_TOP,
                     format!(
                         "{canvas_width} × {canvas_height} · {} fps",
-                        self.project.settings.fps
+                        crate::model::FPS
                     ),
                     FontId::monospace(9.5),
                     theme::MUTED,
@@ -2554,7 +2668,7 @@ impl SpliceApp {
                         "{} × {} · {} fps",
                         self.project.settings.width,
                         self.project.settings.height,
-                        self.project.settings.fps
+                        crate::model::FPS
                     ))
                     .size(10.5),
                 );
@@ -2588,8 +2702,7 @@ impl SpliceApp {
                 ui.end_row();
                 ui.label(RichText::new("Audio").size(10.0).color(theme::MUTED));
                 ui.label(
-                    RichText::new(format!("{} Hz · stereo", self.project.settings.sample_rate))
-                        .size(10.5),
+                    RichText::new(format!("{} Hz · stereo", crate::model::SAMPLE_RATE)).size(10.5),
                 );
                 ui.end_row();
                 ui.label(RichText::new("Duration").size(10.0).color(theme::MUTED));
@@ -2696,6 +2809,7 @@ impl SpliceApp {
             Dialog::Missing => self.dialog_missing(ctx),
             Dialog::About => self.dialog_about(ctx),
             Dialog::ConfirmDiscard(action) => self.dialog_confirm_discard(ctx, action),
+            Dialog::Recover(path) => self.dialog_recover(ctx, path),
         }
     }
 
@@ -3086,6 +3200,42 @@ impl SpliceApp {
         }
     }
 
+    fn dialog_recover(&mut self, ctx: &egui::Context, recovery: PathBuf) {
+        egui::Window::new("Recover unsaved edits?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .default_width(440.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Splice found an autosave newer than this project, which usually means it closed before the last edits were saved.",
+                    )
+                    .size(12.0)
+                    .color(theme::TEXT),
+                );
+                if let Some(error) = &self.dialog_error {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(error).size(10.5).color(theme::DANGER));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let restore =
+                        egui::Button::new(RichText::new("Recover").strong().color(theme::BG))
+                            .fill(theme::ACCENT);
+                    if ui.add(restore).clicked() {
+                        self.recover_from(&recovery);
+                    }
+                    if ui.button("Discard autosave").clicked() {
+                        self.clear_autosave();
+                        self.recovery_unresolved = false;
+                        self.dialog = Dialog::None;
+                        self.dialog_error = None;
+                    }
+                });
+            });
+    }
+
     fn dialog_missing(&mut self, ctx: &egui::Context) {
         let mut window_open = true;
         let missing: Vec<(String, String, String)> = self
@@ -3300,8 +3450,8 @@ impl SpliceApp {
                         "canvas: {}×{} @ {} fps · audio {} Hz stereo",
                         self.project.settings.width,
                         self.project.settings.height,
-                        self.project.settings.fps,
-                        self.project.settings.sample_rate
+                        crate::model::FPS,
+                        crate::model::SAMPLE_RATE
                     ))
                     .monospace()
                     .size(10.0),

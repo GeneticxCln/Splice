@@ -121,6 +121,20 @@ pub fn write_ass(project: &Project, width: u32, height: u32, path: &Path) -> Res
     Ok(true)
 }
 
+/// A font name goes into a comma-separated ASS style line, so commas and
+/// control characters (which could start a new line) are replaced.
+fn sanitize_font_name(font: &str) -> String {
+    font.chars()
+        .map(|character| {
+            if character == ',' || character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
 fn style_line(index: usize, title: &Title, layout: &TitleLayout) -> String {
     let font_size = layout.style_font_size;
     let font = if title.font.trim().is_empty() {
@@ -128,7 +142,7 @@ fn style_line(index: usize, title: &Title, layout: &TitleLayout) -> String {
     } else {
         title.font.as_str()
     };
-    let font = font.replace(',', " ");
+    let font = sanitize_font_name(font);
     let primary = ass_color(&title.color, 0);
     let outline = ass_color(&title.background, alpha_for(title.background_opacity));
     let back = ass_color(&title.background, alpha_for(title.background_opacity));
@@ -766,6 +780,18 @@ pub fn escape_filter_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn font_names_cannot_inject_extra_ass_lines() {
+        let mut title = Title::opening("Hello");
+        title.font =
+            "Evil,1\n[Events]\nDialogue: 0,0:00:00.00,9:00:00.00,Default,,0,0,0,,pwned".into();
+        let layout = layout_title(&title, 1920, 1080);
+        let line = style_line(0, &title, &layout);
+        assert!(!line.contains('\n'), "{line:?}");
+        assert_eq!(line.matches("Style:").count(), 1);
+        assert!(!line.contains("Evil,"));
+    }
+
     use super::*;
 
     #[test]

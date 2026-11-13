@@ -13,6 +13,19 @@ pub fn import_media(
     tools: &Toolchain,
     path: &Path,
 ) -> Result<MediaAsset> {
+    let asset = probe_asset(project_dir, tools, path)?;
+    project.media.push(asset.clone());
+    Ok(asset)
+}
+
+/// Probes `path` and builds the library entry without touching any project,
+/// so it can run on a worker thread. With `project_dir` the stored path is
+/// relative to it where possible; without, it is absolute.
+pub fn probe_asset(
+    project_dir: Option<&Path>,
+    tools: &Toolchain,
+    path: &Path,
+) -> Result<MediaAsset> {
     let absolute = std::fs::canonicalize(path)
         .with_context(|| format!("could not resolve media path {}", path.display()))?;
     let info = tools.probe(&absolute)?;
@@ -34,7 +47,7 @@ pub fn import_media(
         None => absolute.to_string_lossy().replace('\\', "/"),
     };
 
-    let asset = MediaAsset {
+    Ok(MediaAsset {
         id: new_id("media"),
         name,
         path: stored,
@@ -49,9 +62,7 @@ pub fn import_media(
             None
         }),
         channels: info.channels,
-    };
-    project.media.push(asset.clone());
-    Ok(asset)
+    })
 }
 
 /// Validates + applies a relink using ffprobe. Returns the refreshed probe data

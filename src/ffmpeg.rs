@@ -141,6 +141,8 @@ impl Toolchain {
                 "json",
                 "-show_format",
                 "-show_streams",
+                "-protocol_whitelist",
+                "file",
             ])
             .arg(path)
             .output()

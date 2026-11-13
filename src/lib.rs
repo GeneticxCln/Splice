@@ -1,10 +1,12 @@
 pub mod app;
 pub mod audio;
 pub mod automovie;
+pub mod autosave;
 pub mod catalog;
 pub mod edit;
 pub mod export;
 pub mod ffmpeg;
+pub mod filters;
 pub mod history;
 pub mod library;
 pub mod model;
