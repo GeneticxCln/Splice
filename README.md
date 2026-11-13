@@ -21,6 +21,10 @@ Projects are versioned JSON documents with the `.splice` extension.
 - Voiceover recording, media relinking, and offline-media validation.
 - Atomic saves, autosave with crash recovery, and a versioned project format.
 - Export progress with cancel; a prompt before unsaved changes are discarded.
+- Picture-in-picture overlays (size and position), and clips can move between
+  compatible tracks.
+- Long timelines preview one 30 s slice at a time, so previews stay fast.
+- Native file choosers through `zenity` or `kdialog` when installed.
 - Landscape and 9:16 Shorts presets for YouTube Shorts and TikTok.
 - 1080p, 720p, and 480p H.264/AAC presets shared by the GUI and CLI.
 - Shorts mode with fill/fit framing, safe-area guides, and automatic title
@@ -72,12 +76,12 @@ partial output.
 
 - Frame rate (30 fps) and audio (48 kHz stereo) are fixed; `settings.fps` and
   `settings.sample_rate` are stored but not applied.
-- Overlay clips fill the whole canvas; there is no picture-in-picture
-  positioning or scaling below 100%, and clips cannot move between tracks.
-- Every edit re-renders the whole preview proxy (after a short delay). Long
-  timelines preview slowly; export is unaffected.
-- File dialogs are typed paths; there is no native file picker.
-- Project `fps` and `sample_rate` in a hand-edited file are ignored.
+- Every edit re-renders the preview (the whole timeline up to 60 s, otherwise
+  one 30 s slice). Where a slice cuts a clip, fades and transitions that
+  straddle the cut and clip-length effects such as Pan & Zoom restart in the
+  preview; export is unaffected.
+- Without `zenity` or `kdialog` the file dialogs are typed paths.
+- A project that has never been saved is not autosaved.
 - Linux only, x86_64 release builds.
 
 ## Demo
@@ -98,6 +102,7 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 bash scripts/check-msrv.sh   # requires rustup and Rust 1.88.0
+cargo test --release --test scale -- --ignored --nocapture   # 10 minute, 120 clip project
 ```
 
 Audio tests marked ignored require a default output device.

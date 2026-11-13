@@ -657,3 +657,50 @@ to run against; the three hardware audio tests were not re-run.
 
 Gate status: PASS, with the items above unverified.
 
+## Slice 14 — remaining analysis items
+
+Date: 2026-11-13. Host: Linux (CachyOS), Rust 1.88.0, ffmpeg n9.0.2.
+
+Picture-in-picture placement, track moves, windowed preview for long
+timelines, native file choosers, the `app.rs` split with headless GUI tests, a
+scale test, pinned and gated CI, and the egui 0.33 / cpal 0.18 upgrade.
+
+```text
+cargo fmt --check                                      exit 0
+cargo clippy --all-targets --locked -- -D warnings     exit 0
+bash scripts/check-msrv.sh   (Rust 1.88.0)             exit 0
+cargo test --locked
+  unittests src/lib.rs        77 passed; 3 ignored (hardware audio)
+  tests/full_suite.rs         12 passed
+  tests/render_smoke.rs        9 passed
+  tests/scale.rs               0 passed; 1 ignored (run explicitly)
+cargo test --lib -- --ignored --test-threads=1         3 passed (real audio device, cpal 0.18)
+cargo test --release --test scale -- --ignored --nocapture
+  preview slice 295-325s:                  0.76 s (3150 byte graph)
+  480p export, 600 s, 120 clips:           54.3 s (60141 byte graph)
+cargo audit                                            0 vulnerabilities; 1 unmaintained warning (ttf-parser)
+splice --screenshot <png> --exit-after-screenshot      SCREENSHOT_OK, UI inspected
+splice voicecheck --seconds 2                          "microphone returned no audio samples" (see below)
+```
+
+`voicecheck` fails identically on the previous commit (cpal 0.15) in this
+session, so it reflects the microphone being unavailable here, not the cpal
+upgrade; the earlier recording gate in Slice 4 was run on a different day.
+
+New regression coverage:
+
+| Change | Test |
+| --- | --- |
+| Overlay placement | `overlay_placement_scales_and_positions_the_clip`, `overlay_without_placement_still_fills_the_canvas` |
+| Track moves | `edit::tests::*` (picture, audio, title, refused moves) |
+| Preview slices | `window::tests::*`, `a_preview_window_matches_the_same_stretch_of_the_full_render`, `app::tests::a_long_timeline_previews_one_slice_and_follows_the_playhead`, `app::tests::playback_carries_on_into_the_next_slice` |
+| File choosers | `filedialog::tests::*`, `app::tests::chosen_files_fill_the_matching_dialog_field` |
+| GUI flows | `app::tests::*` |
+| Release gate | jq logic run against sample and real check-run data |
+
+Not exercised: the file choosers against a real `zenity` or `kdialog` window,
+and the GitHub workflows themselves (YAML was parsed and the gate script
+syntax-checked, but nothing ran on GitHub).
+
+Gate status: PASS, with the items above unverified.
+

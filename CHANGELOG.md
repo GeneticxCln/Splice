@@ -21,6 +21,20 @@
 - Font names can no longer inject extra lines into the generated ASS file.
 
 ### Added
+- Picture-in-picture: overlay clips have an optional `placement` (size and
+  position) with inspector sliders. Clips can be moved between the primary
+  video and overlay tracks, and between audio tracks.
+- Long timelines (over 60 s) preview one 30 s slice around the playhead, render
+  the next slice when the playhead leaves it, and carry playback across the
+  boundary. A 30 s slice of a ten minute, 120 clip project renders in under a
+  second; its 480p export takes about a minute (`tests/scale.rs`).
+- Native file choosers through `zenity` or `kdialog`, with Browse buttons in
+  the Open, Save, Import, Export and Relink dialogs.
+- Headless GUI tests that drive the unsaved-changes prompt, window close,
+  shortcuts, undo, autosave and recovery, threaded import, the file-chooser
+  wiring, every dialog and slice playback through a plain egui context.
+- Weekly `cargo audit`, Dependabot, workflow actions pinned to commit hashes,
+  and a release job that waits for CI to pass on the tagged commit.
 - Export progress bar and a Cancel button. Cancelling, or quitting during an
   export, stops ffmpeg and removes the temporary file.
 - Unsaved-changes prompt for New, Open, dropping a project, Quit and closing
@@ -38,6 +52,9 @@
   export cancellation.
 
 ### Changed
+- egui/eframe 0.33 and cpal 0.18; the 1.88 MSRV is unchanged. `cargo audit`
+  reports no vulnerabilities (one unmaintained transitive crate, ttf-parser).
+- `app.rs` is split into `app/{mod,panels,dialogs,editors}.rs`.
 - `render_project` is split: effect filters live in `filters.rs`, the audio mix
   is its own function, and ffmpeg is driven through `runner.rs`.
 - The UI shows the 30 fps / 48 kHz the renderer actually uses.

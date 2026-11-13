@@ -112,6 +112,11 @@ A project has four default tracks: `Video 1` (primary), `Overlay`, `Music`, and
   still image.
 - `effects` is an ordered list. `params` is a name → number map, so unknown
   parameters are preserved rather than silently dropped.
+- `placement` is optional and only used by clips on the Overlay track:
+  `{"scale": 0.4, "x": 1.0, "y": -1.0}`. `scale` is the fraction of the canvas
+  (0.1 to 1.0); `x` and `y` run from -1 (flush left or top) through 0
+  (centred) to 1 (flush right or bottom) across the free space. Absent, the
+  clip fills the canvas. Adding it is a version-preserving change.
 - `transition` belongs to the incoming clip. The timeline reflow places the clip
   so it overlaps the previous one by the transition duration.
 - `motion` is optional and empty/absent for a static clip. Its keyframes use
