@@ -26,3 +26,53 @@ thiserror = "2"
 
 [dev-dependencies]
 sha2 = "0.10"
+
+[profile.release]
+strip = true
+
+# Linux packages. The binary is `splice`; the packages are `splice-editor` to
+# stay clear of unrelated `splice` packages in distribution archives.
+[package.metadata.deb]
+name = "splice-editor"
+maintainer = "GeneticxCln <GeneticxCln@users.noreply.github.com>"
+copyright = "2026, GeneticxCln"
+license-file = ["LICENSE", "0"]
+section = "video"
+priority = "optional"
+extended-description = """\
+Splice is a native Linux timeline video editor with a storyboard and a \
+four-track timeline, 58 transitions, 38 effects, animated titles, \
+picture-in-picture overlays, voiceover recording and 16:9 or 9:16 Shorts \
+export. It uses the system ffmpeg for media probing, previews and H.264/AAC \
+export."""
+depends = "ffmpeg, libasound2 | libasound2t64, libgl1"
+recommends = "fonts-dejavu-core, fontconfig, libwayland-client0, libxkbcommon0, zenity | kdialog"
+assets = [
+    ["target/release/splice", "usr/bin/splice", "755"],
+    ["packaging/splice.desktop", "usr/share/applications/splice.desktop", "644"],
+    ["packaging/splice.svg", "usr/share/icons/hicolor/scalable/apps/splice.svg", "644"],
+    ["packaging/splice-project.xml", "usr/share/mime/packages/splice-project.xml", "644"],
+    ["README.md", "usr/share/doc/splice-editor/README.md", "644"],
+    ["CHANGELOG.md", "usr/share/doc/splice-editor/CHANGELOG.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "splice-editor"
+license = "MIT"
+url = "https://github.com/GeneticxCln/Splice"
+assets = [
+    { source = "target/release/splice", dest = "/usr/bin/splice", mode = "755" },
+    { source = "packaging/splice.desktop", dest = "/usr/share/applications/splice.desktop", mode = "644" },
+    { source = "packaging/splice.svg", dest = "/usr/share/icons/hicolor/scalable/apps/splice.svg", mode = "644" },
+    { source = "packaging/splice-project.xml", dest = "/usr/share/mime/packages/splice-project.xml", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/licenses/splice-editor/LICENSE", mode = "644", doc = false },
+    { source = "README.md", dest = "/usr/share/doc/splice-editor/README.md", mode = "644", doc = true },
+    { source = "CHANGELOG.md", dest = "/usr/share/doc/splice-editor/CHANGELOG.md", mode = "644", doc = true },
+]
+
+# ffmpeg is a runtime requirement too, but Fedora's own ffmpeg-free has no
+# libx264, so it is documented rather than required.
+[package.metadata.generate-rpm.requires]
+alsa-lib = "*"
+mesa-libGL = "*"
+
