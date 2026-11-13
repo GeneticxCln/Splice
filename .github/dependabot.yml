@@ -1,11 +1,20 @@
 version: 2
 updates:
+  # One pull request per month for all workflow actions, so pinned hashes are
+  # reviewed together. Major bumps still arrive here and need a look.
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+  # Cargo: minor and patch updates are grouped; anything larger is its own PR.
   - package-ecosystem: cargo
     directory: /
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]

@@ -137,8 +137,12 @@ fn import_all(
 
 fn sha256(path: &Path) -> String {
     let bytes = std::fs::read(path).expect("read source for hash");
-    let digest = Sha256::digest(bytes);
-    format!("{digest:x}")
+    // Hex by hand: the digest type implements LowerHex in sha2 0.10 but not in
+    // 0.11, and iterating its bytes works in both.
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn source_hashes(f: &Fixtures) -> Vec<(PathBuf, String)> {
