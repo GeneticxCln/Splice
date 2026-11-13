@@ -866,6 +866,8 @@ impl SpliceApp {
             .and_then(|(_, clip)| clip.media_id.clone())
             .and_then(|id| self.project.media_by_id(&id).cloned());
         let snapshot = self.project.clone();
+        let destinations = edit::valid_destinations(&self.project, &selection);
+        let mut move_to: Option<String> = None;
         let mut changed = false;
         let mut do_split = false;
         let mut do_duplicate = false;
@@ -1159,6 +1161,26 @@ impl SpliceApp {
             motion_editor(ui, &mut clip.motion, duration, local_playhead, &mut changed);
         }
 
+        if track_kind == TrackKind::Overlay && clip.title.is_none() {
+            ui.add_space(6.0);
+            ui.separator();
+            placement_editor(ui, &mut clip.placement, &mut changed);
+        }
+
+        if !destinations.is_empty() {
+            ui.add_space(6.0);
+            ui.separator();
+            theme::section_label(ui, "Track");
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Move to").size(10.5).color(theme::MUTED));
+                for (id, name) in &destinations {
+                    if ui.button(name).clicked() {
+                        move_to = Some(id.clone());
+                    }
+                }
+            });
+        }
+
         ui.add_space(6.0);
         ui.separator();
         theme::section_label(ui, "Audio");
@@ -1194,6 +1216,17 @@ impl SpliceApp {
                 edit::reflow_primary_ordered(&mut self.project);
             }
             self.mark_edited();
+        }
+        if let Some(track_id) = move_to {
+            let before = self.project.clone();
+            match edit::move_clip_to_track(&mut self.project, &selection, &track_id) {
+                Ok(()) => {
+                    self.push_undo_snapshot(before);
+                    self.mark_edited();
+                    self.set_status("Clip moved to another track", false);
+                }
+                Err(error) => self.set_status(format!("{error:#}"), true),
+            }
         }
         if do_split {
             self.split_selected();

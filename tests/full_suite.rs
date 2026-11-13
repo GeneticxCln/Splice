@@ -983,6 +983,7 @@ fn titles_on_the_primary_video_track_are_rejected_on_save() {
         audio: splice::model::AudioParams::default(),
         title: Some(Title::opening("Misplaced")),
         motion: splice::model::ClipMotion::default(),
+        placement: None,
     };
     project.primary_video_track_mut().unwrap().clips.push(clip);
     let path = dir.path().join("bad.splice");

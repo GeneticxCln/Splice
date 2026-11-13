@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::OverlayPlacement;
 
 pub(super) fn title_editor(ui: &mut Ui, title: &mut Title, changed: &mut bool) {
     theme::section_label(ui, "Title");
@@ -495,4 +496,52 @@ pub(super) fn paint_short_safe_areas(painter: &egui::Painter, frame: Rect) {
         Stroke::new(1.0_f32, theme::GOLD),
         egui::StrokeKind::Inside,
     );
+}
+
+/// Size and position of an overlay clip. Shows "Fills the canvas" until the
+/// first slider moves, and clears the placement again when it is back at the
+/// defaults.
+pub(super) fn placement_editor(
+    ui: &mut Ui,
+    placement: &mut Option<OverlayPlacement>,
+    changed: &mut bool,
+) {
+    theme::section_label(ui, "Placement");
+    let mut value = placement.unwrap_or_default();
+    let mut percent = value.scale * 100.0;
+    let mut edited = false;
+    edited |= ui
+        .add(
+            egui::Slider::new(&mut percent, 10.0..=100.0)
+                .text("Size")
+                .suffix("%"),
+        )
+        .changed();
+    edited |= ui
+        .add(egui::Slider::new(&mut value.x, -1.0..=1.0).text("Left ↔ right"))
+        .changed();
+    edited |= ui
+        .add(egui::Slider::new(&mut value.y, -1.0..=1.0).text("Top ↕ bottom"))
+        .changed();
+    if placement.is_none() && !edited {
+        theme::muted(
+            ui,
+            "Fills the canvas. Lower the size to make it picture-in-picture.",
+        );
+    }
+    if placement.is_some() && ui.button("Reset placement").clicked() {
+        *placement = None;
+        *changed = true;
+        return;
+    }
+    if edited {
+        value.scale = percent / 100.0;
+        let value = value.clamped();
+        *placement = if value.is_identity() {
+            None
+        } else {
+            Some(value)
+        };
+        *changed = true;
+    }
 }

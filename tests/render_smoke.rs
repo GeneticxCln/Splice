@@ -6,8 +6,9 @@ use splice::export::{export_project, export_project_with};
 use splice::ffmpeg::Toolchain;
 use splice::library::import_media;
 use splice::model::{
-    AudioParams, ClipMotion, EffectKind, Framing, MediaKind, MotionEasing, MotionKeyframe, Project,
-    Title, TitleMotion, TitleMotionPreset, Transition, TransitionKind, default_clip_for,
+    AudioParams, ClipMotion, EffectKind, Framing, MediaKind, MotionEasing, MotionKeyframe,
+    OverlayPlacement, Project, Title, TitleMotion, TitleMotionPreset, Transition, TransitionKind,
+    default_clip_for,
 };
 use splice::presets::ExportPreset;
 use splice::runner::{Cancelled, RenderControl};
@@ -461,4 +462,148 @@ fn export_cancel_stops_ffmpeg_and_leaves_no_files() {
         leftovers.is_empty(),
         "temp files left behind: {leftovers:?}"
     );
+}
+
+fn rgb_at(video: &Path, at: f64, points: &[(usize, usize)]) -> Vec<[u8; 3]> {
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+        .args(["-ss", &format!("{at:.3}")])
+        .arg("-i")
+        .arg(video)
+        .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+        .output()
+        .expect("extract frame");
+    assert!(output.status.success());
+    assert_eq!(output.stdout.len(), 854 * 480 * 3);
+    points
+        .iter()
+        .map(|&(x, y)| {
+            let offset = (y * 854 + x) * 3;
+            [
+                output.stdout[offset],
+                output.stdout[offset + 1],
+                output.stdout[offset + 2],
+            ]
+        })
+        .collect()
+}
+
+fn solid_still(dir: &Path, name: &str, color: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        &format!("color=c={color}:s=640x360:d=1"),
+        "-frames:v",
+        "1",
+        path.to_str().unwrap(),
+    ]);
+    path
+}
+
+fn is_blue(pixel: [u8; 3]) -> bool {
+    pixel[2] > 150 && pixel[0] < 90 && pixel[1] < 90
+}
+
+fn is_red(pixel: [u8; 3]) -> bool {
+    pixel[0] > 150 && pixel[1] < 90 && pixel[2] < 90
+}
+
+#[test]
+fn overlay_placement_scales_and_positions_the_clip() {
+    let dir = TempDir::new().unwrap();
+    let tools = Toolchain::detect().unwrap();
+    let red = solid_still(dir.path(), "red.png", "0xff0000");
+    let blue = solid_still(dir.path(), "blue.png", "0x0000ff");
+
+    let mut project = Project::new("Picture in picture");
+    let base = import_media(&mut project, Some(dir.path()), &tools, &red).unwrap();
+    let pip = import_media(&mut project, Some(dir.path()), &tools, &blue).unwrap();
+    let mut base_clip = default_clip_for(&base, 0.0);
+    base_clip.out_point = 4.0;
+    project
+        .primary_video_track_mut()
+        .unwrap()
+        .clips
+        .push(base_clip);
+    project.reflow_primary();
+
+    let mut overlay_clip = default_clip_for(&pip, 1.0);
+    overlay_clip.out_point = 2.0;
+    overlay_clip.placement = Some(OverlayPlacement {
+        scale: 0.5,
+        x: -1.0,
+        y: -1.0,
+    });
+    project
+        .overlay_track_mut()
+        .unwrap()
+        .clips
+        .push(overlay_clip);
+
+    let output = dir.path().join("pip.mp4");
+    export_project(&project, dir.path(), &tools, ExportPreset::P480p, &output).unwrap();
+
+    // 854x480 canvas, overlay 427x240 flush top-left.
+    let top_left = (100, 60);
+    let inside_edge = (400, 220);
+    let outside_right = (600, 100);
+    let outside_below = (200, 400);
+    let bottom_right = (780, 440);
+    let during = rgb_at(
+        &output,
+        1.5,
+        &[
+            top_left,
+            inside_edge,
+            outside_right,
+            outside_below,
+            bottom_right,
+        ],
+    );
+    assert!(
+        is_blue(during[0]),
+        "top-left should be the overlay: {:?}",
+        during[0]
+    );
+    assert!(is_blue(during[1]), "inside the overlay: {:?}", during[1]);
+    assert!(is_red(during[2]), "right of the overlay: {:?}", during[2]);
+    assert!(is_red(during[3]), "below the overlay: {:?}", during[3]);
+    assert!(is_red(during[4]), "far corner: {:?}", during[4]);
+
+    // Before the overlay starts the whole frame is the base clip.
+    let before = rgb_at(&output, 0.4, &[top_left]);
+    assert!(is_red(before[0]), "{:?}", before[0]);
+}
+
+#[test]
+fn overlay_without_placement_still_fills_the_canvas() {
+    let dir = TempDir::new().unwrap();
+    let tools = Toolchain::detect().unwrap();
+    let red = solid_still(dir.path(), "red.png", "0xff0000");
+    let blue = solid_still(dir.path(), "blue.png", "0x0000ff");
+    let mut project = Project::new("Full overlay");
+    let base = import_media(&mut project, Some(dir.path()), &tools, &red).unwrap();
+    let top = import_media(&mut project, Some(dir.path()), &tools, &blue).unwrap();
+    let mut base_clip = default_clip_for(&base, 0.0);
+    base_clip.out_point = 3.0;
+    project
+        .primary_video_track_mut()
+        .unwrap()
+        .clips
+        .push(base_clip);
+    project.reflow_primary();
+    let mut overlay_clip = default_clip_for(&top, 1.0);
+    overlay_clip.out_point = 1.0;
+    project
+        .overlay_track_mut()
+        .unwrap()
+        .clips
+        .push(overlay_clip);
+
+    let output = dir.path().join("full.mp4");
+    export_project(&project, dir.path(), &tools, ExportPreset::P480p, &output).unwrap();
+    let frame = rgb_at(&output, 1.5, &[(10, 10), (427, 240), (840, 470)]);
+    assert!(frame.iter().all(|pixel| is_blue(*pixel)), "{frame:?}");
 }

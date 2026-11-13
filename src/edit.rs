@@ -226,6 +226,75 @@ pub fn sort_and_reflow_primary(project: &mut Project) {
     reflow_primary_ordered(project);
 }
 
+/// Tracks a clip may be moved to: picture clips swap between the primary
+/// video track and the overlay track, audio clips between audio tracks, and
+/// titles never leave the overlay track.
+pub fn valid_destinations(project: &Project, clip_id: &str) -> Vec<(String, String)> {
+    let Some((source, clip)) = project.clip_by_id(clip_id) else {
+        return Vec::new();
+    };
+    if clip.title.is_some() {
+        return Vec::new();
+    }
+    let Some(asset) = clip
+        .media_id
+        .as_deref()
+        .and_then(|id| project.media_by_id(id))
+    else {
+        return Vec::new();
+    };
+    let want_visual = asset.kind != MediaKind::Audio;
+    project
+        .tracks
+        .iter()
+        .filter(|track| track.id != source.id && track.kind.is_visual() == want_visual)
+        .map(|track| (track.id.clone(), track.name.clone()))
+        .collect()
+}
+
+/// Moves a clip to another track of a compatible kind. Moving onto the primary
+/// track appends it after the last clip; moving off it closes the gap. The
+/// clip keeps its timeline position on every other track.
+pub fn move_clip_to_track(project: &mut Project, clip_id: &str, track_id: &str) -> Result<()> {
+    if !valid_destinations(project, clip_id)
+        .iter()
+        .any(|(id, _)| id == track_id)
+    {
+        bail!("this clip cannot be moved to that track");
+    }
+    let mut moved = None;
+    for track in &mut project.tracks {
+        if let Some(index) = track.clips.iter().position(|clip| clip.id == clip_id) {
+            moved = Some((track.kind, track.clips.remove(index)));
+            break;
+        }
+    }
+    let Some((source_kind, mut clip)) = moved else {
+        bail!("clip {clip_id} no longer exists");
+    };
+    let destination_kind = project
+        .track_by_id(track_id)
+        .map(|track| track.kind)
+        .ok_or_else(|| anyhow::anyhow!("unknown track {track_id}"))?;
+
+    // A transition or placement only means something on its own track.
+    clip.transition = None;
+    if destination_kind != TrackKind::Overlay {
+        clip.placement = None;
+    }
+    if destination_kind == TrackKind::Video {
+        clip.start = project.primary_end();
+    }
+    let destination = project
+        .track_by_id_mut(track_id)
+        .expect("destination checked");
+    destination.clips.push(clip);
+    if source_kind == TrackKind::Video || destination_kind == TrackKind::Video {
+        reflow_primary_ordered(project);
+    }
+    Ok(())
+}
+
 pub fn clip_track_kind(project: &Project, clip_id: &str) -> Option<TrackKind> {
     project.clip_by_id(clip_id).map(|(track, _)| track.kind)
 }
@@ -406,5 +475,74 @@ mod tests {
         assert!(project.clip_by_id(&id).unwrap().1.title.is_some());
         assert!(project.clip_by_id(&right).unwrap().1.title.is_some());
         assert_eq!(project.title_clips().len(), 2);
+    }
+
+    #[test]
+    fn picture_clips_swap_between_primary_and_overlay() {
+        let (mut project, ids) = project_with_clips(&[2.0, 3.0, 1.0]);
+        let overlay = "track-overlay-1";
+        assert_eq!(
+            valid_destinations(&project, &ids[1]),
+            vec![(overlay.to_string(), "Overlay".to_string())]
+        );
+
+        move_clip_to_track(&mut project, &ids[1], overlay).unwrap();
+        assert_eq!(starts(&project), vec![0.0, 2.0], "gap closed");
+        let (track, clip) = project.clip_by_id(&ids[1]).unwrap();
+        assert_eq!(track.id, overlay);
+        assert_eq!(clip.start, 2.0, "keeps its time position");
+
+        move_clip_to_track(&mut project, &ids[1], "track-video-1").unwrap();
+        assert_eq!(primary_ids(&project)[2], ids[1], "appended at the end");
+        assert_eq!(starts(&project), vec![0.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn placement_and_transition_are_dropped_when_they_stop_applying() {
+        let (mut project, ids) = project_with_clips(&[2.0, 2.0]);
+        project.clip_by_id_mut(&ids[1]).unwrap().1.transition = Some(Transition {
+            kind: TransitionKind::Fade,
+            duration: 0.5,
+        });
+        move_clip_to_track(&mut project, &ids[1], "track-overlay-1").unwrap();
+        let clip = &project.clip_by_id(&ids[1]).unwrap().1;
+        assert!(clip.transition.is_none());
+        project.clip_by_id_mut(&ids[1]).unwrap().1.placement =
+            Some(crate::model::OverlayPlacement {
+                scale: 0.4,
+                x: 1.0,
+                y: 1.0,
+            });
+        move_clip_to_track(&mut project, &ids[1], "track-video-1").unwrap();
+        assert!(project.clip_by_id(&ids[1]).unwrap().1.placement.is_none());
+    }
+
+    #[test]
+    fn audio_clips_move_between_audio_tracks_only() {
+        let mut project = Project::new("t");
+        let music = asset(MediaKind::Audio, 10.0);
+        project.media.push(music.clone());
+        let id = add_asset_to_timeline(&mut project, &music)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            valid_destinations(&project, &id),
+            vec![("track-audio-voice".to_string(), "Voiceover".to_string())]
+        );
+        move_clip_to_track(&mut project, &id, "track-audio-voice").unwrap();
+        assert_eq!(project.clip_by_id(&id).unwrap().0.id, "track-audio-voice");
+        assert!(move_clip_to_track(&mut project, &id, "track-video-1").is_err());
+        assert!(move_clip_to_track(&mut project, &id, "track-overlay-1").is_err());
+    }
+
+    #[test]
+    fn titles_and_unknown_targets_cannot_be_moved() {
+        let mut project = Project::new("t");
+        let title = add_title_clip(&mut project, Title::opening("Hi"), 0.0, 2.0);
+        assert!(valid_destinations(&project, &title).is_empty());
+        let before = project.clone();
+        assert!(move_clip_to_track(&mut project, &title, "track-video-1").is_err());
+        assert!(move_clip_to_track(&mut project, "missing", "track-video-1").is_err());
+        assert_eq!(project, before, "a refused move changes nothing");
     }
 }

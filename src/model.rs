@@ -179,6 +179,63 @@ pub struct Clip {
     /// Optional clip-local scale/pan keyframes.
     #[serde(default, skip_serializing_if = "ClipMotion::is_empty")]
     pub motion: ClipMotion,
+    /// Where an overlay clip sits on the canvas. `None` fills the canvas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<OverlayPlacement>,
+}
+
+/// Size and position of an overlay clip (picture-in-picture).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct OverlayPlacement {
+    /// Fraction of the canvas width and height, 0.1..=1.0.
+    #[serde(default = "default_placement_scale")]
+    pub scale: f64,
+    /// Horizontal position across the free space: -1 flush left, 0 centred,
+    /// 1 flush right.
+    #[serde(default)]
+    pub x: f64,
+    /// Vertical position across the free space: -1 top, 0 centred, 1 bottom.
+    #[serde(default)]
+    pub y: f64,
+}
+
+fn default_placement_scale() -> f64 {
+    1.0
+}
+
+impl Default for OverlayPlacement {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            x: 0.0,
+            y: 0.0,
+        }
+    }
+}
+
+impl OverlayPlacement {
+    pub const MIN_SCALE: f64 = 0.1;
+
+    pub fn is_identity(&self) -> bool {
+        (self.scale - 1.0).abs() < 1e-6 && self.x.abs() < 1e-6 && self.y.abs() < 1e-6
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.scale.is_finite()
+            && self.x.is_finite()
+            && self.y.is_finite()
+            && (Self::MIN_SCALE..=1.0).contains(&self.scale)
+            && (-1.0..=1.0).contains(&self.x)
+            && (-1.0..=1.0).contains(&self.y)
+    }
+
+    pub fn clamped(self) -> Self {
+        Self {
+            scale: self.scale.clamp(Self::MIN_SCALE, 1.0),
+            x: self.x.clamp(-1.0, 1.0),
+            y: self.y.clamp(-1.0, 1.0),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -719,6 +776,7 @@ impl Project {
             audio: AudioParams::default(),
             title: Some(title),
             motion: ClipMotion::default(),
+            placement: None,
         };
         let track = self.overlay_track_mut().expect("overlay track");
         track.clips.push(clip);
@@ -856,5 +914,6 @@ pub fn default_clip_for(asset: &MediaAsset, start: f64) -> Clip {
         audio: AudioParams::default(),
         title: None,
         motion: ClipMotion::default(),
+        placement: None,
     }
 }

@@ -205,6 +205,15 @@ fn validate_project(project: &Project) -> Result<()> {
                 ))
                 .into());
             }
+            if let Some(placement) = &clip.placement {
+                if !placement.is_valid() {
+                    return Err(ProjectError::Invalid(format!(
+                        "clip {} has an invalid overlay placement",
+                        clip.id
+                    ))
+                    .into());
+                }
+            }
             if !clip.motion.origin.is_finite() || clip.motion.origin < 0.0 {
                 return Err(ProjectError::Invalid(format!(
                     "clip {} has an invalid motion origin",

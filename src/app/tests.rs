@@ -427,3 +427,26 @@ fn browse_buttons_render_in_every_path_dialog() {
         app.close_dialog();
     }
 }
+
+#[test]
+fn overlay_inspector_with_placement_renders() {
+    let (mut app, ctx, ids) = app_with_clips(2);
+    edit::move_clip_to_track(&mut app.project, &ids[1], "track-overlay-1").unwrap();
+    app.project.clip_by_id_mut(&ids[1]).unwrap().1.placement =
+        Some(crate::model::OverlayPlacement {
+            scale: 0.4,
+            x: 0.5,
+            y: -0.5,
+        });
+    app.selected_clip = Some(ids[1].clone());
+    idle(&mut app, &ctx);
+    idle(&mut app, &ctx);
+    // And the primary clip's inspector offers the move.
+    app.selected_clip = Some(ids[0].clone());
+    idle(&mut app, &ctx);
+    assert_eq!(
+        edit::valid_destinations(&app.project, &ids[0]).len(),
+        1,
+        "primary clip can move to the overlay"
+    );
+}

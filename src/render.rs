@@ -8,7 +8,8 @@ use anyhow::{Context, Result, bail};
 use crate::ffmpeg::Toolchain;
 use crate::filters::{ffmpeg_color, frame_filter, push_effect};
 use crate::model::{
-    Clip, MediaAsset, MediaKind, Project, Track, TrackKind, TransitionKind, resolve_media_path,
+    Clip, MediaAsset, MediaKind, OverlayPlacement, Project, Track, TrackKind, TransitionKind,
+    resolve_media_path,
 };
 use crate::runner::{self, Cancelled, RenderControl};
 use crate::titles::{escape_filter_path, write_ass};
@@ -269,6 +270,27 @@ pub fn render_project(
                 &mut filters,
                 &mut used_labels,
             );
+            // Picture-in-picture: shrink the clip and let the overlay filter
+            // place it. Without a placement the clip fills the canvas.
+            let placement = clip
+                .placement
+                .map(OverlayPlacement::clamped)
+                .filter(|placement| !placement.is_identity());
+            let mut overlay_label = overlay_label;
+            let mut position = "x=0:y=0".to_string();
+            if let Some(placement) = placement {
+                let scaled_width = even(((width as f64) * placement.scale).round() as u32);
+                let scaled_height = even(((height as f64) * placement.scale).round() as u32);
+                let scaled = used_labels.next("ovs");
+                filters.push(format!(
+                    "[{overlay_label}]format=rgba,scale={scaled_width}:{scaled_height}:flags=bicubic[{scaled}]"
+                ));
+                overlay_label = scaled;
+                position = format!(
+                    "x=(W-w)/2*(1+({:.4})):y=(H-h)/2*(1+({:.4}))",
+                    placement.x, placement.y
+                );
+            }
             let padded = used_labels.next("ov");
             let start_ms = (clip.start * 1000.0).round().max(0.0) as u64;
             if start_ms > 0 {
@@ -282,7 +304,7 @@ pub fn render_project(
             let next = used_labels.next("comp");
             let end = clip.start + clip.duration();
             filters.push(format!(
-                "[{composed}][{padded}]overlay=x=0:y=0:enable='between(t,{:.3},{:.3})':eof_action=pass:shortest=0,format=yuv420p[{next}]",
+                "[{composed}][{padded}]overlay={position}:enable='between(t,{:.3},{:.3})':eof_action=pass:shortest=0,format=yuv420p[{next}]",
                 clip.start, end
             ));
             composed = next;
@@ -857,6 +879,7 @@ mod tests {
                 easing: MotionEasing::Linear,
                 origin: 0.0,
             },
+            placement: None,
         }
     }
 
