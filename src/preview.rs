@@ -13,7 +13,7 @@ use crate::audio::AudioMonitor;
 use crate::ffmpeg::Toolchain;
 use crate::model::{FPS, Project};
 use crate::render::{RenderOptions, render_project};
-use crate::runner::RenderControl;
+use crate::runner::{Cancelled, RenderControl};
 
 pub const PREVIEW_WIDTH: u32 = 960;
 pub const PREVIEW_HEIGHT: u32 = 540;
@@ -112,6 +112,7 @@ enum RenderMessage {
         generation: u64,
         error: String,
     },
+    Cancelled,
 }
 
 struct FrameMessage {
@@ -225,6 +226,11 @@ impl Preview {
     pub fn invalidate(&mut self) {
         self.stop_playback();
         self.dirty_since = Some(Instant::now());
+        // A render of the old project is stale; stop it so the new one can
+        // start without waiting for it to finish.
+        if self.rendering {
+            self.render_control.cancel();
+        }
     }
 
     pub fn set_playhead(&mut self, time: f64, timeline_duration: f64) {
@@ -459,6 +465,9 @@ impl Preview {
                     width,
                     height,
                 },
+                Err(error) if error.downcast_ref::<Cancelled>().is_some() => {
+                    RenderMessage::Cancelled
+                }
                 Err(error) => RenderMessage::Failed {
                     generation,
                     error: format!("{error:#}"),
@@ -498,6 +507,10 @@ impl Preview {
                 self.desired_frame = Some(self.playhead.min(duration.max(0.01) - 0.01));
                 self.frame_rx = None;
                 self.start_frame_load(self.desired_frame.unwrap_or(0.0));
+            }
+            Ok(RenderMessage::Cancelled) => {
+                self.render_rx = None;
+                self.rendering = false;
             }
             Ok(RenderMessage::Failed { generation, error }) => {
                 self.render_rx = None;

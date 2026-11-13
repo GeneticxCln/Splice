@@ -49,6 +49,21 @@ const GRAPH_ERROR_CHARS: usize = 4000;
 struct InputSpec {
     path: PathBuf,
     image: bool,
+    /// Source window (start, length) in seconds. ffmpeg seeks straight to
+    /// the start instead of decoding the file from the beginning.
+    window: Option<(f64, f64)>,
+}
+
+/// The part of the source a clip plays, clamped to the file's duration.
+fn source_window(clip: &Clip, asset: &MediaAsset) -> (f64, f64) {
+    let limit = if asset.duration > 0.0 {
+        asset.duration
+    } else {
+        clip.out_point
+    };
+    let start = clip.in_point.clamp(0.0, (limit - 0.02).max(0.0));
+    let end = clip.out_point.min(limit).max(start + 0.01);
+    (start, end)
 }
 
 struct Visual {
@@ -110,9 +125,17 @@ pub fn render_project(
                 continue;
             }
             let index = inputs.len();
+            let image = asset.kind == MediaKind::Image;
+            let window = if image {
+                None
+            } else {
+                let (start, end) = source_window(clip, asset);
+                Some((start, end - start))
+            };
             inputs.push(InputSpec {
                 path,
-                image: asset.kind == MediaKind::Image,
+                image,
+                window,
             });
             input_for_clip.insert(clip.id.clone(), index);
         }
@@ -122,6 +145,7 @@ pub fn render_project(
     inputs.push(InputSpec {
         path: PathBuf::new(),
         image: false,
+        window: None,
     });
     let _ = silence_index;
 
@@ -320,17 +344,13 @@ pub fn render_project(
             }
             let label = used_labels.next("a");
             let mut chain = String::new();
-            let source_start = clip.in_point.max(0.0);
-            let source_end = if asset.duration > 0.0 {
-                clip.out_point.min(asset.duration)
-            } else {
-                clip.out_point
-            };
-            let source_end = source_end.max(source_start + 0.01);
+            // The input is already seeked to the clip's in-point.
+            let (source_start, source_end) = source_window(clip, asset);
+            let window = source_end - source_start;
             let duration = clip.duration();
             let _ = write!(
                 chain,
-                "[{input_index}:a]atrim=start={source_start:.4}:end={source_end:.4},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur={duration:.4},atrim=duration={duration:.4}"
+                "[{input_index}:a]atrim=duration={window:.4},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur={duration:.4},atrim=duration={duration:.4}"
             );
             let volume = clip.audio.volume.clamp(0.0, 2.0);
             let _ = write!(chain, ",volume={volume:.4}");
@@ -388,6 +408,9 @@ pub fn render_project(
     for input in &inputs {
         if input.image {
             command.args(["-loop", "1", "-framerate", "30"]);
+        }
+        if let Some((start, length)) = input.window {
+            command.args(["-ss", &format!("{start:.4}"), "-t", &format!("{length:.4}")]);
         }
         if input.path.as_os_str().is_empty() {
             command.args([
@@ -567,18 +590,13 @@ fn prepare_visual(
             "[{input}:v]trim=duration={requested:.4},setpts=PTS-STARTPTS,{framing},setsar=1,fps=30"
         );
     } else {
-        let source_limit = if asset.duration > 0.0 {
-            asset.duration
-        } else {
-            clip.out_point
-        };
-        let start = clip.in_point.clamp(0.0, (source_limit - 0.02).max(0.0));
-        let end = clip.out_point.min(source_limit).max(start + 0.01);
+        let (start, end) = source_window(clip, asset);
         let available = (end - start).max(0.01);
         let extra = (requested - available).max(0.0);
+        // The input is already seeked to `start`, so only the length is cut.
         let _ = write!(
             chain,
-            "[{input}:v]trim=start={start:.4}:end={end:.4},setpts=PTS-STARTPTS,{framing},setsar=1,fps=30"
+            "[{input}:v]trim=duration={available:.4},setpts=PTS-STARTPTS,{framing},setsar=1,fps=30"
         );
         if extra > 0.01 {
             let _ = write!(chain, ",tpad=stop_mode=clone:stop_duration={extra:.4}");

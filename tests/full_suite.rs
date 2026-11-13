@@ -992,3 +992,46 @@ fn titles_on_the_primary_video_track_are_rejected_on_save() {
     assert!(error.contains("Overlay"), "{error}");
     assert!(!path.exists());
 }
+
+fn scaled_source_frame(tools: &Toolchain, video: &Path, at: f64) -> image::RgbImage {
+    let output = Command::new(&tools.ffmpeg)
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+        .args(["-ss", &format!("{at:.3}")])
+        .arg("-i")
+        .arg(video)
+        .args(["-frames:v", "1", "-vf", "scale=854:480"])
+        .args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+        .output()
+        .expect("extract source frame");
+    assert!(output.status.success(), "source frame extraction failed");
+    image::RgbImage::from_raw(FRAME_WIDTH, FRAME_HEIGHT, output.stdout).expect("rgb image")
+}
+
+/// Inputs are seeked to the clip's in-point rather than trimmed from the start
+/// of the file, so the first output frame must still be the in-point frame.
+#[test]
+fn trimmed_clip_plays_from_its_in_point_not_from_the_file_start() {
+    let f = fixtures();
+    let tools = Toolchain::detect().expect("ffmpeg/ffprobe");
+    let mut project = empty_project();
+    let asset = import_media(&mut project, Some(f.dir.path()), &tools, &f.one).expect("import");
+    let mut clip = default_clip_for(&asset, 0.0);
+    clip.in_point = 2.0;
+    clip.out_point = 3.0;
+    project.primary_video_track_mut().unwrap().clips.push(clip);
+    edit::reflow_primary_ordered(&mut project);
+
+    let output = f.dir.path().join("trimmed.mp4");
+    let report = export_project(&project, f.dir.path(), &tools, ExportPreset::P480p, &output)
+        .expect("export trimmed clip");
+    assert!((report.duration - 1.0).abs() < 0.05, "{}", report.duration);
+
+    let exported = frame(&tools, &output, 0.5);
+    let right = mean_abs_diff(&exported, &scaled_source_frame(&tools, &f.one, 2.5));
+    let wrong = mean_abs_diff(&exported, &scaled_source_frame(&tools, &f.one, 0.5));
+    assert!(
+        right < wrong,
+        "output at 0.5s matches source 0.5s ({wrong:.2}) at least as well as source 2.5s ({right:.2})"
+    );
+    assert!(right < 12.0, "in-point frame differs too much: {right:.2}");
+}
